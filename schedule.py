@@ -1,26 +1,28 @@
 """
-Streamlit app: Daily schedule planner in Monkeytype‑inspired dark theme.
-Save this file as **app.py** and push to your Streamlit Cloud repo.
-Run locally:  streamlit run app.py
-
-Requires:
-    pip install streamlit pandas streamlit-aggrid
+Streamlit app: Daily schedule planner in Monkeytype‑style
+Save as **app.py**.  Run with `streamlit run app.py` or deploy to Streamlit Cloud.
+Dependencies (requirements.txt):
+    streamlit==1.44.1
+    streamlit-aggrid==0.3.4.post3
+    pandas==2.2.3
+Optionally add runtime.txt with `python‑3.11` for Cloud.
 """
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
-# ---------- CONFIG ----------
+# ---------- CONSTANTS ----------
 TOTAL_MINUTES = 12 * 60  # 12‑hour baseline for % column
-DATA_DIR = Path("data")  # folder where CSVs are stored (auto‑created)
+DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
+# ---------- PAGE CONFIG ----------
 st.set_page_config(
-    page_title="Расписание (Monkeytype style)",
+    page_title="Расписание — Monkeytype",
     page_icon="⏱️",
     layout="wide",
 )
@@ -29,26 +31,20 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Import JetBrains Mono */
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
-
-    html, body, [class*="st-"], .ag-theme-streamlit {
+    html, body, [class*="st-"] {
         background-color: #181818 !important;
         color: #e0e0e0 !important;
         font-family: 'JetBrains Mono', monospace !important;
     }
-    .stApp { padding: 0 1rem; }
-
-    /* Accent color */
-    .accent { color: #ff8f1f; }
-    .ag-header, .ag-root-wrapper, .ag-theme-streamlit {
-        background-color: #1e1e1e !important;
-        border-color: #2b2b2b !important;
-    }
+    .stApp { padding-top: 0.5rem; }
+    .accent { color: #ff8f1f; font-weight: 600; }
+    /* Ag‑Grid overrides */
+    .ag-theme-streamlit, .ag-root-wrapper { background-color: #1e1e1e !important; border-color: #2b2b2b !important; }
+    .ag-header, .ag-header-cell-label { color: #e0e0e0 !important; font-weight: 600; }
+    .ag-header-cell-label:hover { color: #ff8f1f !important; }
     .ag-row-even { background-color: #202020 !important; }
     .ag-row-hover { background-color: #252525 !important; }
-    .ag-header-cell-label { color: #e0e0e0 !important; font-weight: 600; }
-    .ag-header-cell-label:hover { color: #ff8f1f !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -56,79 +52,85 @@ st.markdown(
 
 # ---------- HELPERS ----------
 
-def load_today_df() -> pd.DataFrame:
-    """Load today's CSV or blank DataFrame."""
-    today_file = DATA_DIR / f"{date.today()}.csv"
-    if today_file.exists():
-        return pd.read_csv(today_file)
-    cols = [
-        "Start", "End", "Activity", "Comment", "Duration (min)", "% of 12h",
-    ]
+def _file_for(d: date) -> Path:
+    return DATA_DIR / f"{d}.csv"
+
+
+def load_df(d: date) -> pd.DataFrame:
+    if _file_for(d).exists():
+        return pd.read_csv(_file_for(d))
+    cols = ["Start", "End", "Activity", "Comment", "Duration (min)", "% of 12h"]
     return pd.DataFrame(columns=cols)
 
 
 def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate Duration + % columns from Start / End."""
     def _calc(row):
         try:
-            start = datetime.strptime(row["Start"], "%H:%M")
-            end = datetime.strptime(row["End"], "%H:%M")
-            dur = (end - start).seconds // 60  # in minutes
+            start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
+            end = datetime.strptime(str(row["End"]).strip(), "%H:%M")
+            dur = (end - start).seconds // 60
             perc = round(dur / TOTAL_MINUTES * 100, 1)
             return pd.Series({"Duration (min)": dur, "% of 12h": perc})
         except Exception:
             return pd.Series({"Duration (min)": None, "% of 12h": None})
-
     metrics = df.apply(_calc, axis=1)
     df.update(metrics)
     return df
 
 
-def save_df(df: pd.DataFrame) -> None:
-    """Persist today's schedule to a dated CSV."""
-    today_file = DATA_DIR / f"{date.today()}.csv"
-    df.to_csv(today_file, index=False)
+def save_df(d: date, df: pd.DataFrame):
+    compute_metrics(df)
+    df.to_csv(_file_for(d), index=False)
 
+# ---------- SESSION STATE ----------
+if "current_date" not in st.session_state:
+    st.session_state.current_date = date.today()
 
-# ---------- UI ----------
-st.markdown("# <span class='accent'>Сегодняшнее расписание</span>", unsafe_allow_html=True)
-
-# Load / session state
 if "df" not in st.session_state:
-    st.session_state.df = load_today_df()
+    st.session_state.df = load_df(st.session_state.current_date)
 
-# Build AgGrid options for editable, sortable, draggable table
+# ---------- HEADER WITH DATE NAVIGATION ----------
+nav_cols = st.columns([1, 5, 1])
+if nav_cols[0].button("←", key="prev_day"):
+    st.session_state.current_date -= timedelta(days=1)
+    st.session_state.df = load_df(st.session_state.current_date)
+
+nav_cols[1].markdown(
+    f"## <span class='accent'>{st.session_state.current_date.strftime('%d %B %Y')}</span>",
+    unsafe_allow_html=True,
+)
+
+if nav_cols[2].button("→", key="next_day"):
+    st.session_state.current_date += timedelta(days=1)
+    st.session_state.df = load_df(st.session_state.current_date)
+
+st.divider()
+
+# ---------- MAIN TABLE (AG‑GRID) ----------
+# Button to add blank row
+a_col, b_col = st.columns([1, 9])
+if a_col.button("➕ Добавить строку"):
+    blank = {c: "" for c in ["Start", "End", "Activity", "Comment"]}
+    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([blank])], ignore_index=True)
+
 builder = GridOptionsBuilder.from_dataframe(st.session_state.df)
-# enable features
 builder.configure_default_column(editable=True, sortable=True, resizable=True)
+# allow row drag + column reorder
 builder.configure_grid_options(enableRowDragging=True)
-builder.configure_grid_options(enableRangeSelection=True)
-# allow column reorder by drag (default true in AgGrid)
+# hide calc columns from editing
+builder.configure_columns(["Duration (min)", "% of 12h"], editable=False)
 
-grid_options = builder.build()
-
-# Display editable grid
-ag_ret = AgGrid(
+grid = AgGrid(
     st.session_state.df,
-    gridOptions=grid_options,
-    theme="streamlit",  # inherits our custom CSS overrides
+    gridOptions=builder.build(),
+    theme="streamlit",
     update_mode=GridUpdateMode.VALUE_CHANGED,
     allow_unsafe_jscode=True,
     fit_columns_on_grid_load=True,
 )
 
-edited_df = ag_ret["data"]
-
-# Auto‑recalculate Duration / % after edits
-edited_df = compute_metrics(edited_df)
-
-# Save button + instant feedback
-cols = st.columns([1, 4, 1])
-if cols[1].button("💾 Сохранить изменения", type="primary"):
-    save_df(edited_df)
-    st.session_state.df = edited_df
-    st.success("Данные сохранены!")
-
-# Optionally show raw dataframe below
-with st.expander("🔍 Посмотреть данные как DataFrame"):
-    st.dataframe(edited_df, use_container_width=True)
+# ---------- SAVE ----------
+if b_col.button("💾 Сохранить", type="primary"):
+    st.session_state.df = grid["data"]
+    save_df(st.session_state.current_date, st.session_state.df)
+    st.success("Сохранено!")
