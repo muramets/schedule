@@ -167,7 +167,7 @@ def save_data(d, df):
 def calculate_metrics(df):
     """Calculate duration and percentage for each activity."""
     # Handle empty dataframe case
-    if df is None or not isinstance(df, pd.DataFrame):
+    if df is None or df.empty:
         return create_empty_df()
     
     # Make a copy to avoid changing during iteration
@@ -205,7 +205,7 @@ def calculate_metrics(df):
 def create_simple_pie_chart(df, group_field):
     """Create a simple pie chart that should work reliably."""
     # Create a safe copy for chart operations
-    chart_df = df.copy() if isinstance(df, pd.DataFrame) else create_empty_df()
+    chart_df = df.copy() if not df.empty else create_empty_df()
     
     # Convert duration to numeric if it's not already
     chart_df["Duration (min)"] = pd.to_numeric(chart_df["Duration (min)"], errors='coerce')
@@ -256,9 +256,6 @@ def create_simple_pie_chart(df, group_field):
 if "current_date" not in st.session_state:
     st.session_state.current_date = date.today()
 
-if "data" not in st.session_state:
-    st.session_state.data = load_data(st.session_state.current_date)
-
 if "chart_group" not in st.session_state:
     st.session_state.chart_group = "Category"
 
@@ -266,19 +263,13 @@ if "chart_group" not in st.session_state:
 def toggle_chart_group():
     st.session_state.chart_group = "Activity" if st.session_state.chart_group == "Category" else "Category"
 
-# Function to handle data editor changes
-def update_data():
-    if "edited_data" in st.session_state:
-        st.session_state.data = calculate_metrics(st.session_state.edited_data)
-
 # ---------------- DATE NAVIGATION ----------------
 col1, col2, col3 = st.columns([1, 5, 1])
 
 with col1:
     if st.button("⬅️", key="prev_day"):
         st.session_state.current_date -= timedelta(days=1)
-        st.session_state.data = load_data(st.session_state.current_date)
-        st.rerun()
+        st.experimental_rerun()
 
 with col2:
     st.markdown(
@@ -289,26 +280,24 @@ with col2:
 with col3:
     if st.button("➡️", key="next_day"):
         st.session_state.current_date += timedelta(days=1)
-        st.session_state.data = load_data(st.session_state.current_date)
-        st.rerun()
+        st.experimental_rerun()
 
 st.divider()
+
+# ---------------- LOAD DATA ONLY AFTER DATE NAVIGATION ----------------
+# This prevents issues with data loading and table resetting
+if "data" not in st.session_state or "last_date" not in st.session_state or st.session_state.last_date != st.session_state.current_date:
+    st.session_state.data = load_data(st.session_state.current_date)
+    st.session_state.last_date = st.session_state.current_date
 
 # ---------------- EDITABLE TABLE ----------------
 st.markdown("### Schedule")
 
-# Create a temporary copy for the editor
-editor_data = st.session_state.data.copy() if not st.session_state.data.empty else create_empty_df()
-
-# Make sure we have a clean DataFrame with reset index
-editor_data = editor_data.reset_index(drop=True)
-
-# Use the data editor with callback
+# Create a data editor with fixed schema to prevent issues
 edited_df = st.data_editor(
-    editor_data,
+    st.session_state.data,
     num_rows="dynamic",
     use_container_width=True,
-    key="edited_data",
     column_config={
         "Start": st.column_config.TextColumn("Start", help="Format: HH:MM"),
         "End": st.column_config.TextColumn("End", help="Format: HH:MM"),
@@ -318,13 +307,17 @@ edited_df = st.data_editor(
         "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
         "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%"),
     },
-    hide_index=True,
-    on_change=update_data
+    hide_index=True
 )
+
+# Update the data in session state with calculated metrics
+if edited_df is not None:
+    st.session_state.data = calculate_metrics(edited_df)
 
 # Add a recalculate button for user convenience
 if st.button("🔄 Recalculate", key="recalc_btn"):
     st.session_state.data = calculate_metrics(st.session_state.data)
+    st.experimental_rerun()
 
 # ---------------- ACTION BUTTONS ----------------
 col1, col2, col3 = st.columns([6, 1, 1])
@@ -360,7 +353,7 @@ with toggle_col2:
     # Hidden button that will be triggered by the JavaScript onclick
     if st.button("Toggle", key="toggle_btn", help="Toggle between Category and Activity view"):
         toggle_chart_group()
-        st.rerun()
+        st.experimental_rerun()
 
 # Create and display the chart
 try:
