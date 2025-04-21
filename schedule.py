@@ -1,301 +1,270 @@
 """
-from __future__ import annotations
-
+Schedule Helper - A MonkeyType-inspired schedule tracking app
+"""
 import pandas as pd
 import streamlit as st
 import altair as alt
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+import json
+import os
 
 # ---------------- CONSTANTS ----------------
 TOTAL_MINUTES = 12 * 60  # 12-hour baseline
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="Schedule Helper", 
-    page_icon="⏱️", 
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="Schedule Helper", page_icon="⏱️", layout="wide")
 
 # ---------------- THEMES / CSS ----------------
-# Monkeytype-dark global styles
+# MonkeyType-dark global styles
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
+    
     html, body, [class*="st-"] {
         background-color: #181818 !important;
         color: #e0e0e0 !important;
         font-family: 'JetBrains Mono', monospace !important;
     }
+    
     .stApp { 
-        background-color: #181818;
+        background-color: #181818 !important;
         padding-top: 0.5rem; 
     }
-    .accent { color: #ff8f1f; font-weight: 600; }
-    /* Ag-Grid */
-    .ag-theme-streamlit, .ag-root-wrapper { 
-        background-color: #1e1e1e !important; 
-        border-color: #2b2b2b !important; 
-    }
-    .ag-header, .ag-header-cell-label { 
-        color: #e0e0e0 !important; 
+    
+    .accent { 
+        color: #ff8f1f; 
         font-weight: 600; 
     }
-    .ag-header-cell-label:hover { 
-        color: #ff8f1f !important; 
+    
+    /* Table styling */
+    .stDataFrame table {
+        background-color: #1e1e1e !important;
+        border-color: #2b2b2b !important;
     }
-    .ag-row-even { 
-        background-color: #202020 !important; 
+    
+    .stDataFrame th {
+        background-color: #232323 !important;
+        color: #e0e0e0 !important;
+        font-weight: 600;
     }
-    .ag-row-hover { 
-        background-color: #252525 !important; 
+    
+    .stDataFrame tr:nth-child(even) {
+        background-color: #202020 !important;
     }
-    /* Radio buttons */
-    .st-eb {
+    
+    .stDataFrame tr:hover {
         background-color: #252525 !important;
     }
-    .st-bh {
-        background-color: #ff8f1f !important;
+    
+    /* Button styling */
+    .stButton > button {
+        background-color: #232323 !important;
+        color: #e0e0e0 !important;
+        border: 1px solid #2b2b2b !important;
     }
-    /* Charts */
-    .vega-embed {
-        background-color: #181818 !important;
+    
+    .stButton > button:hover {
+        background-color: #2b2b2b !important;
+        border-color: #ff8f1f !important;
+    }
+    
+    .stButton > button[data-baseweb="button"][kind="primary"] {
+        background-color: #ff8f1f !important;
+        color: #181818 !important;
+    }
+    
+    /* Radio button styling */
+    .stRadio [role="radiogroup"] {
+        background-color: #232323 !important;
+        padding: 0.5rem !important;
+        border-radius: 4px !important;
+    }
+    
+    /* Other elements */
+    .stDivider {
+        background-color: #2b2b2b !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Altair dark theme
-def dark_theme():
-    return {
-        "config": {
-            "view": {"stroke": "transparent"},
-            "background": "#181818",
-            "title": {
-                "color": "#e0e0e0",
-                "font": "JetBrains Mono",
-                "fontWeight": 600
-            },
-            "legend": {
-                "labelColor": "#e0e0e0",
-                "titleColor": "#e0e0e0",
-                "font": "JetBrains Mono"
-            }
-        }
-    }
-
-alt.themes.register('dark', dark_theme)
-alt.themes.enable('dark')
-
 # ---------------- HELPERS ----------------
+def get_file_path(d):
+    """Get the file path for a specific date."""
+    return os.path.join(DATA_DIR, f"{d.strftime('%Y-%m-%d')}.json")
 
-def _file_for(d: date) -> Path:
-    return DATA_DIR / f"{d}.csv"
+def load_data(d):
+    """Load data for a specific date."""
+    file_path = get_file_path(d)
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            try:
+                return pd.DataFrame(json.load(f))
+            except:
+                return create_empty_df()
+    return create_empty_df()
 
+def create_empty_df():
+    """Create an empty dataframe with the correct columns."""
+    return pd.DataFrame(columns=["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"])
 
-def load_df(d: date) -> pd.DataFrame:
-    if _file_for(d).exists():
-        df = pd.read_csv(_file_for(d))
-        # Ensure all required columns exist
-        for col in ["Start", "End", "Category", "Activity", "Comment"]:
-            if col not in df.columns:
-                df[col] = ""
-        if "Duration (min)" not in df.columns:
-            df["Duration (min)"] = 0
-        if "% of 12h" not in df.columns:
-            df["% of 12h"] = 0.0
+def save_data(d, df):
+    """Save data for a specific date."""
+    file_path = get_file_path(d)
+    # Convert to records for JSON serialization
+    df_dict = df.to_dict('records')
+    with open(file_path, 'w') as f:
+        json.dump(df_dict, f)
+
+def calculate_metrics(df):
+    """Calculate duration and percentage for each activity."""
+    if len(df) == 0:
         return df
     
-    return pd.DataFrame(columns=[
-        "Start", "End", "Category", "Activity", "Comment", 
-        "Duration (min)", "% of 12h"
-    ])
-
-
-def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalculate duration + percent in-place and return df."""
-    def _calc(row):
+    for i, row in df.iterrows():
         try:
-            start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
-            end = datetime.strptime(str(row["End"]).strip(), "%H:%M")
-            dur = (end - start).seconds // 60
-            perc = round(dur / TOTAL_MINUTES * 100, 1)
-            return pd.Series({"Duration (min)": dur, "% of 12h": perc})
-        except Exception:
-            return pd.Series({"Duration (min)": 0, "% of 12h": 0.0})
-
-    metrics = df.apply(_calc, axis=1)
-    df["Duration (min)"] = metrics["Duration (min)"]
-    df["% of 12h"] = metrics["% of 12h"]
+            if pd.notna(row["Start"]) and pd.notna(row["End"]):
+                start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
+                end = datetime.strptime(str(row["End"]).strip(), "%H:%M")
+                
+                # Handle cases where end time is on the next day
+                if end < start:
+                    end = end + timedelta(days=1)
+                
+                duration_min = (end - start).seconds // 60
+                percent = round(duration_min / TOTAL_MINUTES * 100, 1)
+                
+                df.at[i, "Duration (min)"] = duration_min
+                df.at[i, "% of 12h"] = percent
+        except Exception as e:
+            pass
+    
     return df
 
+def create_pie_chart(df, group_field):
+    """Create a pie chart based on the specified grouping field."""
+    # Filter and aggregate data
+    valid_data = df.dropna(subset=[group_field, "Duration (min)"])
+    if not valid_data.empty:
+        agg_data = valid_data.groupby(group_field)["Duration (min)"].sum().reset_index()
+        agg_data["Percent"] = (agg_data["Duration (min)"] / TOTAL_MINUTES * 100).round(1)
+        agg_data["Label"] = agg_data.apply(lambda x: f"{x[group_field]}: {x['Percent']}%", axis=1)
+        
+        # Create the chart
+        chart = alt.Chart(agg_data).mark_arc(innerRadius=50, outerRadius=120).encode(
+            theta=alt.Theta(field="Duration (min)", type="quantitative"),
+            color=alt.Color(field=group_field, type="nominal", legend=None),
+            tooltip=[
+                alt.Tooltip(group_field), 
+                alt.Tooltip("Duration (min)", title="Minutes"),
+                alt.Tooltip("Percent", title="% of 12h")
+            ]
+        ).properties(
+            width=400,
+            height=400,
+            background="#181818"
+        )
+        
+        # Add text labels
+        text = chart.mark_text(radius=140, fontSize=12).encode(
+            text="Label"
+        )
+        
+        return chart + text
+    else:
+        # Empty dataframe, return empty chart
+        empty_df = pd.DataFrame({group_field: ["No Data"], "Duration (min)": [1], "Percent": [100]})
+        return alt.Chart(empty_df).mark_arc(innerRadius=50, outerRadius=120).encode(
+            theta=alt.Theta(field="Duration (min)", type="quantitative"),
+            color=alt.value("#333333"),
+            tooltip=[alt.Tooltip(group_field)]
+        ).properties(
+            width=400,
+            height=400,
+            background="#181818"
+        )
 
-def save_df(d: date, df: pd.DataFrame):
-    compute_metrics(df)
-    df.to_csv(_file_for(d), index=False)
-
-
-def make_pie(df: pd.DataFrame, group_field: str) -> alt.Chart:
-    agg = (
-        df.dropna(subset=[group_field, "Duration (min)"])
-        .groupby(group_field)["Duration (min)"]
-        .sum()
-        .reset_index()
-    )
-    
-    if agg.empty or agg["Duration (min)"].sum() == 0:
-        agg = pd.DataFrame({group_field: ["No data"], "Duration (min)": [1]})
-    
-    agg["Percent"] = agg["Duration (min)"] / agg["Duration (min)"].sum() * 100
-    
-    base = alt.Chart(agg).encode(
-        theta=alt.Theta("Percent:Q", stack=True),
-        color=alt.Color(f"{group_field}:N", legend=alt.Legend(title=group_field)),
-        tooltip=[
-            alt.Tooltip(f"{group_field}:N", title="Category"),
-            alt.Tooltip("Duration (min):Q", title="Minutes"),
-            alt.Tooltip("Percent:Q", format=".1f", title="Percentage")
-        ]
-    )
-    
-    pie = base.mark_arc(outerRadius=120, innerRadius=50)
-    text = base.mark_text(radius=180, size=12).encode(text=f"{group_field}:N")
-    
-    return (pie + text).properties(
-        width=400,
-        height=400,
-        title=f"Time by {group_field}"
-    )
-
-# ---------------- SESSION STATE ----------------
+# ---------------- SESSION STATE SETUP ----------------
 if "current_date" not in st.session_state:
     st.session_state.current_date = date.today()
 
-if "df" not in st.session_state:
-    st.session_state.df = load_df(st.session_state.current_date)
+if "data" not in st.session_state:
+    st.session_state.data = load_data(st.session_state.current_date)
 
-# ---------------- HEADER (date nav) ----------------
-nav_cols = st.columns([1, 5, 1])
-with nav_cols[0]:
-    if st.button("← Previous", use_container_width=True):
+# ---------------- DATE NAVIGATION ----------------
+col1, col2, col3 = st.columns([1, 5, 1])
+
+with col1:
+    if st.button("⬅️"):
         st.session_state.current_date -= timedelta(days=1)
-        st.session_state.df = load_df(st.session_state.current_date)
+        st.session_state.data = load_data(st.session_state.current_date)
         st.rerun()
 
-nav_cols[1].markdown(
-    f"## <span class='accent'>{st.session_state.current_date.strftime('%d %B %Y')}</span>",
-    unsafe_allow_html=True,
-)
+with col2:
+    st.markdown(
+        f"## <span class='accent'>{st.session_state.current_date.strftime('%d %B %Y')}</span>",
+        unsafe_allow_html=True,
+    )
 
-with nav_cols[2]:
-    if st.button("Next →", use_container_width=True):
+with col3:
+    if st.button("➡️"):
         st.session_state.current_date += timedelta(days=1)
-        st.session_state.df = load_df(st.session_state.current_date)
+        st.session_state.data = load_data(st.session_state.current_date)
         st.rerun()
 
 st.divider()
 
-# ---------------- TABLE ----------------
-compute_metrics(st.session_state.df)
+# ---------------- EDITABLE TABLE ----------------
+st.markdown("### Schedule")
 
-# Configure grid
-builder = GridOptionsBuilder.from_dataframe(st.session_state.df)
-builder.configure_default_column(
-    editable=True, 
-    sortable=True, 
-    resizable=True,
-    filterable=True
+# Create a placeholder for the edited dataframe
+edited_df = st.data_editor(
+    st.session_state.data,
+    num_rows="dynamic",
+    use_container_width=True,
+    column_config={
+        "Start": st.column_config.TextColumn("Start", help="Format: HH:MM"),
+        "End": st.column_config.TextColumn("End", help="Format: HH:MM"),
+        "Category": st.column_config.TextColumn("Category"),
+        "Activity": st.column_config.TextColumn("Activity", help="What you did"),
+        "Comment": st.column_config.TextColumn("Comment"),
+        "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
+        "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%"),
+    },
+    hide_index=True,
 )
 
-# Enable row dragging
-builder.configure_grid_options(
-    enableRowDrag=True,
-    rowDragManaged=True,
-    animateRows=True
+# Calculate metrics when the data has changed
+if not edited_df.equals(st.session_state.data):
+    st.session_state.data = calculate_metrics(edited_df)
+
+# ---------------- ACTION BUTTONS ----------------
+col1, col2, col3 = st.columns([6, 1, 1])
+with col3:
+    if st.button("💾 Save", type="primary"):
+        save_data(st.session_state.current_date, st.session_state.data)
+        st.success("Saved successfully!")
+
+st.divider()
+
+# ---------------- CHARTS ----------------
+st.markdown("### Time Analysis")
+
+# Chart type selector
+chart_type = st.radio(
+    "Group by:",
+    options=["Category", "Activity"],
+    horizontal=True
 )
 
-# Make sure metrics columns are not editable
-builder.configure_columns(["Duration (min)", "% of 12h"], editable=False)
-
-# Add custom cell editor for time fields
-time_editor = JsCode("""
-    function(params) {
-        if (!params.value) return '';
-        return params.value.length === 5 ? params.value : '';
-    }
-""")
-
-builder.configure_column("Start", cellEditor=time_editor)
-builder.configure_column("End", cellEditor=time_editor)
-
-grid = AgGrid(
-    st.session_state.df,
-    gridOptions=builder.build(),
-    update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.MODEL_CHANGED,
-    theme="streamlit",
-    allow_unsafe_jscode=True,
-    fit_columns_on_grid_load=True,
-    height=500,
-    reload_data=True
-)
-
-# Update dataframe if changed
-if grid["data"] is not None:
-    st.session_state.df = compute_metrics(pd.DataFrame(grid["data"]))
-
-# ---------------- BUTTONS ----------------
-btn_cols = st.columns([8, 1, 2])
-with btn_cols[1]:
-    if st.button("➕ Add Row", use_container_width=True):
-        blank_row = {
-            "Start": "",
-            "End": "",
-            "Category": "",
-            "Activity": "",
-            "Comment": "",
-            "Duration (min)": 0,
-            "% of 12h": 0.0
-        }
-        st.session_state.df = pd.concat([
-            st.session_state.df,
-            pd.DataFrame([blank_row])
-        ], ignore_index=True)
-        st.rerun()
-
-with btn_cols[2]:
-    if st.button("💾 Save", type="primary", use_container_width=True):
-        save_df(st.session_state.current_date, st.session_state.df)
-        st.toast("Schedule saved!", icon="✅")
-
-# ---------------- PIE CHART ----------------
-st.subheader("Time Distribution")
-
-# Filter out empty categories/activities
-valid_df = st.session_state.df[
-    (st.session_state.df["Category"].notna()) & 
-    (st.session_state.df["Category"] != "") &
-    (st.session_state.df["Duration (min)"] > 0)
-]
-
-if not valid_df.empty:
-    tab1, tab2 = st.tabs(["By Category", "By Activity"])
-    
-    with tab1:
-        st.altair_chart(
-            make_pie(valid_df, "Category"), 
-            use_container_width=True
-        )
-    
-    with tab2:
-        st.altair_chart(
-            make_pie(valid_df, "Activity"), 
-            use_container_width=True
-        )
+# Create and display the chart
+if not st.session_state.data.empty:
+    chart = create_pie_chart(st.session_state.data, chart_type)
+    st.altair_chart(chart, use_container_width=True)
 else:
-    st.info("No activities with duration to display")
+    st.info("Add some schedule entries to see analytics.")
