@@ -1,3 +1,4 @@
+"""
 Schedule Helper - A MonkeyType-inspired schedule tracking app
 """
 import pandas as pd
@@ -73,11 +74,6 @@ st.markdown(
     .stButton > button:hover {
         background-color: #2b2b2b !important;
         border-color: #ff8f1f !important;
-    }
-    
-    .stButton > button:focus {
-        text-decoration: none !important;
-        box-shadow: none !important;
     }
     
     .stButton > button[data-baseweb="button"][kind="primary"] {
@@ -450,9 +446,6 @@ try:
     else:
         edit_df = st.session_state["data"].copy()
     
-    # Set index to start from 1
-    edit_df.index = range(1, len(edit_df)+1)
-    
     # Simple data editor with minimal configuration
     edited_df = st.data_editor(
         edit_df,
@@ -467,6 +460,7 @@ try:
             "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
             "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
         },
+        hide_index=True,
         key="data_editor"
     )
     
