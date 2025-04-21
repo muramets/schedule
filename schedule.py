@@ -1,16 +1,17 @@
 """
-Schedule Helper — Streamlit app в стиле Monkeytype
-===================================================
-Сохрани как **app.py** и запусти `streamlit run app.py` или задеплой на Streamlit Cloud.
+Schedule Helper — Streamlit app (Monkeytype dark)
+================================================
+*Редактируемое расписание с категориями, drag‑&‑drop строк, автосчёт длительности и круговая диаграмма.*
 
-**requirements.txt**:
+### Установка
+`requirements.txt`:
 ```
 streamlit==1.44.1
-streamlit‑aggrid==0.3.4.post3
+streamlit-aggrid==0.3.4.post3
 pandas==2.2.3
 altair==5.5.0
 ```
-(в Cloud при желании добавь `runtime.txt` → `python-3.11`)
+*(На Streamlit Cloud добавь `runtime.txt` → `python‑3.11` при необходимости)*
 """
 from __future__ import annotations
 
@@ -21,19 +22,16 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
-# ---------- CONSTANTS ----------
+# ---------------- CONSTANTS ----------------
 TOTAL_MINUTES = 12 * 60  # 12‑hour baseline
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
-# ---------- PAGE CONFIG ----------
-st.set_page_config(
-    page_title="Schedule Helper",
-    page_icon="⏱️",
-    layout="wide",
-)
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(page_title="Schedule Helper", page_icon="⏱️", layout="wide")
 
-# ---------- GLOBAL CSS (Monkeytype dark) ----------
+# ---------------- THEMES / CSS ----------------
+# Monkeytype‑dark global styles
 st.markdown(
     """
     <style>
@@ -45,7 +43,7 @@ st.markdown(
     }
     .stApp { padding-top: 0.5rem; }
     .accent { color: #ff8f1f; font-weight: 600; }
-    /* Ag‑Grid overrides */
+    /* Ag‑Grid */
     .ag-theme-streamlit, .ag-root-wrapper { background-color: #1e1e1e !important; border-color: #2b2b2b !important; }
     .ag-header, .ag-header-cell-label { color: #e0e0e0 !important; font-weight: 600; }
     .ag-header-cell-label:hover { color: #ff8f1f !important; }
@@ -56,7 +54,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- HELPERS ----------
+# Altair dark background so pie blends in
+alt.themes.enable(lambda: {
+    "config": {
+        "view": {"stroke": None},
+        "title": {"color": "#e0e0e0", "font": "JetBrains Mono"},
+        "background": "#181818",
+        "legend": {"labelColor": "#e0e0e0", "titleColor": "#e0e0e0"},
+    }
+})
+
+# ---------------- HELPERS ----------------
 
 def _file_for(d: date) -> Path:
     return DATA_DIR / f"{d}.csv"
@@ -65,14 +73,12 @@ def _file_for(d: date) -> Path:
 def load_df(d: date) -> pd.DataFrame:
     if _file_for(d).exists():
         return pd.read_csv(_file_for(d))
-    cols = [
-        "Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h",
-    ]
+    cols = ["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"]
     return pd.DataFrame(columns=cols)
 
 
 def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate *Duration (min)* and *% of 12h* for each row in‑place."""
+    """Recalculate duration + percent in‑place and return df."""
     def _calc(row):
         try:
             start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
@@ -92,32 +98,38 @@ def save_df(d: date, df: pd.DataFrame):
     df.to_csv(_file_for(d), index=False)
 
 
-def make_pie(df: pd.DataFrame, group_field: str, title: str) -> alt.Chart:
-    agg = df.dropna(subset=[group_field, "Duration (min)"]).groupby(group_field)["Duration (min)"].sum().reset_index()
+def make_pie(df: pd.DataFrame, group_field: str) -> alt.Chart:
+    agg = (
+        df.dropna(subset=[group_field, "Duration (min)"])
+        .groupby(group_field)["Duration (min)"]
+        .sum()
+        .reset_index()
+    )
     if agg.empty:
         agg = pd.DataFrame({group_field: [""], "Duration (min)": [0]})
     agg["Percent"] = agg["Duration (min)"] / TOTAL_MINUTES * 100
+
     return (
         alt.Chart(agg)
-        .mark_arc()
+        .mark_arc(outerRadius=120)
         .encode(
-            theta="Percent",
-            color=f"{group_field}",
-            tooltip=[group_field, "Percent"]
+            theta=alt.Theta("Percent", stack=True),
+            color=alt.Color(group_field, legend=None),
+            tooltip=[group_field, alt.Tooltip("Percent", format=".1f")]
         )
-        .properties(title=title)
+        .properties(width=300, height=300)
     )
 
-# ---------- SESSION STATE ----------
+# ---------------- SESSION STATE ----------------
 if "current_date" not in st.session_state:
     st.session_state.current_date = date.today()
 
 if "df" not in st.session_state:
     st.session_state.df = load_df(st.session_state.current_date)
 
-# ---------- HEADER WITH DATE NAVIGATION ----------
+# ---------------- HEADER (date nav) ----------------
 nav_cols = st.columns([1, 5, 1])
-if nav_cols[0].button("←", key="prev_day"):
+if nav_cols[0].button("←"):
     st.session_state.current_date -= timedelta(days=1)
     st.session_state.df = load_df(st.session_state.current_date)
 
@@ -126,52 +138,49 @@ nav_cols[1].markdown(
     unsafe_allow_html=True,
 )
 
-if nav_cols[2].button("→", key="next_day"):
+if nav_cols[2].button("→"):
     st.session_state.current_date += timedelta(days=1)
     st.session_state.df = load_df(st.session_state.current_date)
 
 st.divider()
 
-# ---------- MAIN TABLE ----------
+# ---------------- TABLE ----------------
 compute_metrics(st.session_state.df)
 
 builder = GridOptionsBuilder.from_dataframe(st.session_state.df)
 builder.configure_default_column(editable=True, sortable=True, resizable=True)
 builder.configure_grid_options(enableRowDragging=True, rowDragManaged=True)
-# first column drag handle
 builder.configure_column("Start", rowDrag=True)
-# calc columns read‑only
 builder.configure_columns(["Duration (min)", "% of 12h"], editable=False)
 
-grid_response = AgGrid(
+grid = AgGrid(
     st.session_state.df,
     gridOptions=builder.build(),
-    theme="streamlit",
     update_mode=GridUpdateMode.VALUE_CHANGED,
+    theme="streamlit",
     allow_unsafe_jscode=True,
     fit_columns_on_grid_load=True,
 )
 
-if grid_response["data"] is not None:
-    st.session_state.df = compute_metrics(pd.DataFrame(grid_response["data"]))
+if grid["data"] is not None:
+    st.session_state.df = compute_metrics(pd.DataFrame(grid["data"]))
 
-# ---------- BUTTONS UNDER TABLE ----------
+# ---------------- BUTTONS ----------------
 btn_cols = st.columns([8, 1, 2])
 with btn_cols[1]:
     if st.button("➕ Добавить строку"):
         blank = {c: "" for c in ["Start", "End", "Category", "Activity", "Comment"]}
         st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([blank])], ignore_index=True)
-        st.experimental_rerun()
-
+        st.rerun()
 with btn_cols[2]:
     if st.button("💾 Сохранить", type="primary"):
         save_df(st.session_state.current_date, st.session_state.df)
         st.success("Сохранено!")
 
-# ---------- PIE CHARTS ----------
+# ---------------- PIE CHART WITH SWITCHER ----------------
 st.subheader("Разбивка времени")
-chart_cols = st.columns(2)
-with chart_cols[0]:
-    st.altair_chart(make_pie(st.session_state.df, "Category", "По категориям"), use_container_width=True)
-with chart_cols[1]:
-    st.altair_chart(make_pie(st.session_state.df, "Activity", "По activity"), use_container_width=True)
+
+option = st.radio("Группировка:", ("Category", "Activity"), horizontal=True, label_visibility="collapsed")
+chart = make_pie(st.session_state.df, option)
+
+st.altair_chart(chart, use_container_width=True)
