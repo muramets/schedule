@@ -153,6 +153,29 @@ st.markdown(
         content: "↓";
         opacity: 1;
     }
+    
+    /* Drag and drop rows */
+    .draggable-row {
+        cursor: move;
+    }
+    
+    .draggable-row:hover {
+        background-color: #2b2b2b !important;
+    }
+    
+    .drag-handle {
+        cursor: move;
+        width: 16px;
+        height: 16px;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='3' y1='12' x2='21' y2='12'%3E%3C/line%3E%3Cline x1='3' y1='6' x2='21' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='18' x2='21' y2='18'%3E%3C/line%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: center;
+        opacity: 0.5;
+    }
+    
+    .drag-handle:hover {
+        opacity: 1;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -352,6 +375,9 @@ if "sort_column" not in st.session_state:
     st.session_state.sort_column = None
     st.session_state.sort_ascending = True
 
+if "dragged_row" not in st.session_state:
+    st.session_state.dragged_row = None
+
 # Function to toggle chart group
 def toggle_chart_group():
     st.session_state.chart_group = "Activity" if st.session_state.chart_group == "Category" else "Category"
@@ -366,6 +392,17 @@ def handle_sort(column):
         st.session_state.sort_column = column
         st.session_state.sort_ascending = True
     st.rerun()
+
+# Function to handle row reordering
+def handle_row_reorder(dragged_index, target_index):
+    if dragged_index is not None and target_index is not None:
+        df = st.session_state["data"].copy()
+        row = df.iloc[dragged_index].copy()
+        df = df.drop(dragged_index).reset_index(drop=True)
+        df.loc[target_index] = row
+        df = df.sort_index().reset_index(drop=True)
+        st.session_state["data"] = df
+        st.rerun()
 
 # ---------------- DATE NAVIGATION ----------------
 col1, col2, col3 = st.columns([1, 5, 1])
@@ -391,14 +428,13 @@ st.divider()
 # ---------------- LOAD DATA ----------------
 # Load data for the current date
 if "data" not in st.session_state or st.session_state.get("data_needs_reload", True):
-    st.session_state["data"] = load_data(st.session_state.current_date)
-    st.session_state["data"] = calculate_metrics(st.session_state["data"])
+    loaded_data = load_data(st.session_state.current_date)
+    st.session_state["data"] = calculate_metrics(loaded_data)
     st.session_state["data_needs_reload"] = False
 
 # ---------------- EDITABLE TABLE ----------------
 st.markdown("### Schedule")
 
-# Use basic DataFrame editor - no extra bells and whistles that can cause issues
 try:
     # Create a base dataframe for editing
     if len(st.session_state["data"]) == 0:
@@ -422,8 +458,15 @@ try:
             ascending=st.session_state.sort_ascending
         )
     
-    # Add custom CSS classes for sortable headers
+    # Add index column for drag and drop
+    edit_df[''] = "⋮⋮"  # Drag handle
+    
+    # Reorder columns to put drag handle first
+    cols = [''] + [col for col in edit_df.columns if col != '']
+    edit_df = edit_df[cols]
+    
     column_config = {
+        "": st.column_config.TextColumn("", disabled=True),
         "Start": st.column_config.TextColumn("Start", required=True),
         "End": st.column_config.TextColumn("End", required=True),
         "Category": st.column_config.TextColumn("Category", required=True),
@@ -443,6 +486,10 @@ try:
         key="data_editor"
     )
     
+    # Remove drag handle column before saving
+    if '' in edited_df.columns:
+        edited_df = edited_df.drop('', axis=1)
+    
     # Immediately calculate metrics when data changes
     if not edited_df.equals(st.session_state.get("last_edited_df", None)):
         st.session_state["data"] = calculate_metrics(edited_df)
@@ -450,16 +497,18 @@ try:
         st.rerun()
         
 except Exception as e:
-    st.error("Error displaying data editor. Please try refreshing the page.")
+    st.error(f"Error displaying data editor: {str(e)}")
     st.session_state["data"] = create_empty_df()
 
-# Add JavaScript for sorting
+# Add JavaScript for sorting and drag and drop
 st.markdown("""
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Sorting functionality
     const headers = document.querySelectorAll('.stDataFrame th');
     headers.forEach(header => {
-        if (header.textContent.trim() !== '') {
+        if (header.textContent.trim() !== '' && !header.textContent.trim().includes('⋮⋮')) {
             header.classList.add('sortable-header');
             
             header.addEventListener('click', function() {
@@ -473,14 +522,45 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     });
+    
+    // Drag and drop functionality
+    const table = document.querySelector('.stDataFrame table tbody');
+    if (table) {
+        new Sortable(table, {
+            animation: 150,
+            handle: '.drag-handle',
+            onEnd: function(evt) {
+                window.parent.postMessage({
+                    isStreamlitMessage: true,
+                    type: 'row_reorder',
+                    oldIndex: evt.oldIndex,
+                    newIndex: evt.newIndex
+                }, '*');
+            }
+        });
+        
+        // Add drag handles to each row
+        const rows = table.querySelectorAll('tr');
+        rows.forEach(row => {
+            const firstCell = row.querySelector('td:first-child');
+            if (firstCell) {
+                firstCell.innerHTML = '<div class="drag-handle">⋮⋮</div>';
+                firstCell.classList.add('draggable-row');
+            }
+        });
+    }
 });
 </script>
 """, unsafe_allow_html=True)
 
-# Handle sorting from JavaScript
+# Handle messages from JavaScript
 if st.session_state.get('sort_column_js'):
     handle_sort(st.session_state.sort_column_js)
     st.session_state.sort_column_js = None
+
+if st.session_state.get('row_reorder'):
+    handle_row_reorder(st.session_state.row_reorder.oldIndex, st.session_state.row_reorder.newIndex)
+    st.session_state.row_reorder = None
 
 # Add a recalculate button for user convenience
 if st.button("🔄 Recalculate", key="recalc_btn"):
