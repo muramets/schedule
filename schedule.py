@@ -176,6 +176,17 @@ st.markdown(
     .drag-handle:hover {
         opacity: 1;
     }
+    
+    /* Delete button styling */
+    .delete-btn {
+        color: #ff5c5c !important;
+        cursor: pointer;
+        font-weight: bold;
+    }
+    
+    .delete-btn:hover {
+        color: #ff2e2e !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -378,6 +389,9 @@ if "sort_column" not in st.session_state:
 if "dragged_row" not in st.session_state:
     st.session_state.dragged_row = None
 
+if "rows_to_delete" not in st.session_state:
+    st.session_state.rows_to_delete = set()
+
 # Function to toggle chart group
 def toggle_chart_group():
     st.session_state.chart_group = "Activity" if st.session_state.chart_group == "Category" else "Category"
@@ -402,6 +416,15 @@ def handle_row_reorder(dragged_index, target_index):
         df.loc[target_index] = row
         df = df.sort_index().reset_index(drop=True)
         st.session_state["data"] = df
+        st.rerun()
+
+# Function to handle row deletion
+def handle_row_deletion():
+    if st.session_state.rows_to_delete:
+        df = st.session_state["data"].copy()
+        df = df.drop(index=list(st.session_state.rows_to_delete)).reset_index(drop=True)
+        st.session_state["data"] = df
+        st.session_state.rows_to_delete = set()
         st.rerun()
 
 # ---------------- DATE NAVIGATION ----------------
@@ -458,15 +481,15 @@ try:
             ascending=st.session_state.sort_ascending
         )
     
-    # Add index column for drag and drop
-    edit_df[''] = "⋮⋮"  # Drag handle
+    # Add delete checkbox column
+    edit_df['Delete'] = False
     
-    # Reorder columns to put drag handle first
-    cols = [''] + [col for col in edit_df.columns if col != '']
+    # Reorder columns to put delete checkbox first
+    cols = ['Delete'] + [col for col in edit_df.columns if col != 'Delete']
     edit_df = edit_df[cols]
     
     column_config = {
-        "": st.column_config.TextColumn("", disabled=True),
+        "Delete": st.column_config.CheckboxColumn("Delete", help="Select rows to delete", width="small"),
         "Start": st.column_config.TextColumn("Start", required=True),
         "End": st.column_config.TextColumn("End", required=True),
         "Category": st.column_config.TextColumn("Category", required=True),
@@ -486,9 +509,16 @@ try:
         key="data_editor"
     )
     
-    # Remove drag handle column before saving
-    if '' in edited_df.columns:
-        edited_df = edited_df.drop('', axis=1)
+    # Handle row deletion
+    if 'Delete' in edited_df.columns:
+        rows_to_delete = set(edited_df.index[edited_df['Delete'] == True].tolist())
+        if rows_to_delete != st.session_state.rows_to_delete:
+            st.session_state.rows_to_delete = rows_to_delete
+            st.rerun()
+    
+    # Remove delete column before saving
+    if 'Delete' in edited_df.columns:
+        edited_df = edited_df.drop('Delete', axis=1)
     
     # Immediately calculate metrics when data changes
     if not edited_df.equals(st.session_state.get("last_edited_df", None)):
@@ -500,7 +530,12 @@ except Exception as e:
     st.error(f"Error displaying data editor: {str(e)}")
     st.session_state["data"] = create_empty_df()
 
-# Add JavaScript for sorting and drag and drop
+# Add delete button
+if st.session_state.rows_to_delete:
+    if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_btn"):
+        handle_row_deletion()
+
+# Add JavaScript for drag and drop and sorting
 st.markdown("""
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js"></script>
 <script>
@@ -508,7 +543,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Sorting functionality
     const headers = document.querySelectorAll('.stDataFrame th');
     headers.forEach(header => {
-        if (header.textContent.trim() !== '' && !header.textContent.trim().includes('⋮⋮')) {
+        if (header.textContent.trim() !== '' && !header.textContent.includes('Delete')) {
             header.classList.add('sortable-header');
             
             header.addEventListener('click', function() {
@@ -542,9 +577,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // Add drag handles to each row
         const rows = table.querySelectorAll('tr');
         rows.forEach(row => {
-            const firstCell = row.querySelector('td:first-child');
+            const firstCell = row.querySelector('td:nth-child(2)'); // Skip delete checkbox cell
             if (firstCell) {
-                firstCell.innerHTML = '<div class="drag-handle">⋮⋮</div>';
+                firstCell.innerHTML = '<div class="drag-handle">⋮⋮</div>' + firstCell.innerHTML;
                 firstCell.classList.add('draggable-row');
             }
         });
