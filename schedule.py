@@ -1,4 +1,3 @@
-*(На Streamlit Cloud добавь `runtime.txt` → `python-3.11` при необходимости)*
 """
 from __future__ import annotations
 
