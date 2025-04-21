@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 from datetime import datetime, date, timedelta
-from pathlib import Path
 import json
 import os
 
@@ -104,7 +103,13 @@ def load_data(d):
     if os.path.exists(file_path):
         with open(file_path, 'r') as f:
             try:
-                return pd.DataFrame(json.load(f))
+                data = json.load(f)
+                df = pd.DataFrame(data)
+                # Ensure all columns exist
+                for col in ["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"]:
+                    if col not in df.columns:
+                        df[col] = ""
+                return df
             except:
                 return create_empty_df()
     return create_empty_df()
@@ -123,12 +128,17 @@ def save_data(d, df):
 
 def calculate_metrics(df):
     """Calculate duration and percentage for each activity."""
-    if len(df) == 0:
+    if df.empty:
         return df
+        
+    # Create copies to avoid modification during iteration
+    df_copy = df.copy()
     
-    for i, row in df.iterrows():
-        try:
-            if pd.notna(row["Start"]) and pd.notna(row["End"]):
+    for i, row in df_copy.iterrows():
+        # Check if we have both start and end time values
+        if pd.notna(row["Start"]) and pd.notna(row["End"]) and row["Start"] and row["End"]:
+            try:
+                # Parse times
                 start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
                 end = datetime.strptime(str(row["End"]).strip(), "%H:%M")
                 
@@ -136,58 +146,61 @@ def calculate_metrics(df):
                 if end < start:
                     end = end + timedelta(days=1)
                 
+                # Calculate metrics
                 duration_min = (end - start).seconds // 60
                 percent = round(duration_min / TOTAL_MINUTES * 100, 1)
                 
+                # Update values in the dataframe
                 df.at[i, "Duration (min)"] = duration_min
                 df.at[i, "% of 12h"] = percent
-        except Exception as e:
-            pass
-    
+            except Exception as e:
+                st.error(f"Error calculating time for row {i+1}: {str(e)}")
+                
     return df
 
-def create_pie_chart(df, group_field):
-    """Create a pie chart based on the specified grouping field."""
-    # Filter and aggregate data
-    valid_data = df.dropna(subset=[group_field, "Duration (min)"])
-    if not valid_data.empty:
-        agg_data = valid_data.groupby(group_field)["Duration (min)"].sum().reset_index()
-        agg_data["Percent"] = (agg_data["Duration (min)"] / TOTAL_MINUTES * 100).round(1)
-        agg_data["Label"] = agg_data.apply(lambda x: f"{x[group_field]}: {x['Percent']}%", axis=1)
+def create_simple_pie_chart(df, group_field):
+    """Create a simpler pie chart that should work reliably."""
+    # Filter out rows with missing data
+    valid_data = df[df[group_field].notna() & df["Duration (min)"].notna()]
+    valid_data = valid_data[valid_data[group_field] != ""]
+    
+    if len(valid_data) == 0:
+        # Return an empty chart placeholder
+        placeholder_df = pd.DataFrame({
+            group_field: ["No data"],
+            "Duration (min)": [100],
+            "Percent": [100]
+        })
         
-        # Create the chart
-        chart = alt.Chart(agg_data).mark_arc(innerRadius=50, outerRadius=120).encode(
-            theta=alt.Theta(field="Duration (min)", type="quantitative"),
-            color=alt.Color(field=group_field, type="nominal", legend=None),
-            tooltip=[
-                alt.Tooltip(group_field), 
-                alt.Tooltip("Duration (min)", title="Minutes"),
-                alt.Tooltip("Percent", title="% of 12h")
-            ]
+        return alt.Chart(placeholder_df).mark_arc().encode(
+            theta=alt.Theta(field="Duration (min)"),
+            color=alt.value("#333333")
         ).properties(
             width=400,
             height=400,
             background="#181818"
         )
-        
-        # Add text labels
-        text = chart.mark_text(radius=140, fontSize=12).encode(
-            text="Label"
-        )
-        
-        return chart + text
-    else:
-        # Empty dataframe, return empty chart
-        empty_df = pd.DataFrame({group_field: ["No Data"], "Duration (min)": [1], "Percent": [100]})
-        return alt.Chart(empty_df).mark_arc(innerRadius=50, outerRadius=120).encode(
-            theta=alt.Theta(field="Duration (min)", type="quantitative"),
-            color=alt.value("#333333"),
-            tooltip=[alt.Tooltip(group_field)]
-        ).properties(
-            width=400,
-            height=400,
-            background="#181818"
-        )
+    
+    # Aggregate data by the grouping field
+    agg_data = valid_data.groupby(group_field)["Duration (min)"].sum().reset_index()
+    agg_data["Percent"] = (agg_data["Duration (min)"] / TOTAL_MINUTES * 100).round(1)
+    
+    # Create chart
+    chart = alt.Chart(agg_data).mark_arc().encode(
+        theta=alt.Theta(field="Duration (min)"),
+        color=alt.Color(field=group_field),
+        tooltip=[
+            alt.Tooltip(group_field),
+            alt.Tooltip("Duration (min)", title="Minutes"),
+            alt.Tooltip("Percent", title="% of 12h", format=".1f")
+        ]
+    ).properties(
+        width=400,
+        height=400,
+        background="#181818"
+    )
+    
+    return chart
 
 # ---------------- SESSION STATE SETUP ----------------
 if "current_date" not in st.session_state:
@@ -196,6 +209,10 @@ if "current_date" not in st.session_state:
 if "data" not in st.session_state:
     st.session_state.data = load_data(st.session_state.current_date)
 
+# Function to handle data changes
+def update_metrics():
+    st.session_state.data = calculate_metrics(st.session_state.data_editor)
+    
 # ---------------- DATE NAVIGATION ----------------
 col1, col2, col3 = st.columns([1, 5, 1])
 
@@ -222,9 +239,11 @@ st.divider()
 # ---------------- EDITABLE TABLE ----------------
 st.markdown("### Schedule")
 
-# Create a placeholder for the edited dataframe
+# Initialize the data editor with a key and callback
 edited_df = st.data_editor(
     st.session_state.data,
+    key="data_editor",
+    on_change=update_metrics,
     num_rows="dynamic",
     use_container_width=True,
     column_config={
@@ -239,9 +258,9 @@ edited_df = st.data_editor(
     hide_index=True,
 )
 
-# Calculate metrics when the data has changed
-if not edited_df.equals(st.session_state.data):
-    st.session_state.data = calculate_metrics(edited_df)
+# Always recalculate metrics to make sure they're up to date
+if "data_editor" in st.session_state:
+    st.session_state.data = calculate_metrics(st.session_state.data_editor)
 
 # ---------------- ACTION BUTTONS ----------------
 col1, col2, col3 = st.columns([6, 1, 1])
@@ -259,12 +278,16 @@ st.markdown("### Time Analysis")
 chart_type = st.radio(
     "Group by:",
     options=["Category", "Activity"],
-    horizontal=True
+    horizontal=True,
+    key="chart_selector"
 )
 
-# Create and display the chart
+# Create and display the chart - Using simplified chart function
 if not st.session_state.data.empty:
-    chart = create_pie_chart(st.session_state.data, chart_type)
-    st.altair_chart(chart, use_container_width=True)
+    try:
+        chart = create_simple_pie_chart(st.session_state.data, chart_type)
+        st.altair_chart(chart, use_container_width=True)
+    except Exception as e:
+        st.error(f"Error creating chart: {str(e)}")
 else:
     st.info("Add some schedule entries to see analytics.")
