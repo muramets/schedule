@@ -83,6 +83,36 @@ st.markdown(
         border-radius: 4px !important;
     }
     
+    /* Fix for text color in data editor */
+    .streamlit-table td div {
+        color: #e0e0e0 !important;
+    }
+    
+    /* Custom toggle switch styling */
+    .toggle-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1rem;
+        background-color: #232323;
+        border-radius: 4px;
+        padding: 0.5rem;
+    }
+    
+    .toggle-option {
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        border-radius: 4px;
+        margin: 0 0.25rem;
+        transition: all 0.3s ease;
+    }
+    
+    .toggle-option.active {
+        background-color: #ff8f1f;
+        color: #181818;
+        font-weight: 600;
+    }
+    
     /* Other elements */
     .stDivider {
         background-color: #2b2b2b !important;
@@ -208,7 +238,7 @@ def create_simple_pie_chart(df, group_field):
     # Create chart
     chart = alt.Chart(agg_data).mark_arc().encode(
         theta=alt.Theta(field="Duration (min)"),
-        color=alt.Color(field=group_field),
+        color=alt.Color(field=group_field, scale=alt.Scale(scheme='tableau20')),
         tooltip=[
             alt.Tooltip(group_field),
             alt.Tooltip("Duration (min)", title="Minutes"),
@@ -228,6 +258,13 @@ if "current_date" not in st.session_state:
 
 if "data" not in st.session_state:
     st.session_state.data = load_data(st.session_state.current_date)
+
+if "chart_group" not in st.session_state:
+    st.session_state.chart_group = "Category"
+
+# Function to toggle chart group
+def toggle_chart_group():
+    st.session_state.chart_group = "Activity" if st.session_state.chart_group == "Category" else "Category"
 
 # ---------------- DATE NAVIGATION ----------------
 col1, col2, col3 = st.columns([1, 5, 1])
@@ -260,7 +297,10 @@ editor_data = st.session_state.data.copy() if not st.session_state.data.empty el
     columns=["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"]
 )
 
-# Use the data editor
+# Save previous data for comparison
+prev_data = editor_data.copy()
+
+# Use the data editor with on_change parameter
 edited_df = st.data_editor(
     editor_data,
     num_rows="dynamic",
@@ -275,10 +315,11 @@ edited_df = st.data_editor(
         "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
         "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%"),
     },
-    hide_index=True
+    hide_index=True,
+    on_change=lambda: None  # This prevents the rerun that was causing input issues
 )
 
-# Update metrics immediately after any edit
+# Update the data in session state
 if edited_df is not None:
     st.session_state.data = calculate_metrics(edited_df)
 
@@ -299,17 +340,33 @@ st.divider()
 # ---------------- CHARTS ----------------
 st.markdown("### Time Analysis")
 
-# Chart type selector
-chart_type = st.radio(
-    "Group by:",
-    options=["Category", "Activity"],
-    horizontal=True,
-    key="chart_selector"
-)
+# Create custom toggle for chart type
+toggle_col1, toggle_col2, toggle_col3 = st.columns([1, 3, 1])
+with toggle_col2:
+    st.markdown(
+        f"""
+        <div class="toggle-container">
+            <div class="toggle-option {'active' if st.session_state.chart_group == 'Category' else ''}" 
+                 onclick="document.getElementById('toggle_btn').click()">
+                Category
+            </div>
+            <div class="toggle-option {'active' if st.session_state.chart_group == 'Activity' else ''}"
+                 onclick="document.getElementById('toggle_btn').click()">
+                Activity
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    # Hidden button that will be triggered by the JavaScript onclick
+    if st.button("Toggle", key="toggle_btn", help="Toggle between Category and Activity view"):
+        toggle_chart_group()
+        st.rerun()
 
 # Create and display the chart
 try:
-    chart = create_simple_pie_chart(st.session_state.data, chart_type)
+    chart = create_simple_pie_chart(st.session_state.data, st.session_state.chart_group)
     st.altair_chart(chart, use_container_width=True)
 except Exception as e:
     st.error(f"Error creating chart: {type(e).__name__}")
