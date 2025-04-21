@@ -49,6 +49,16 @@ st.markdown(
         background-color: #232323 !important;
         color: #e0e0e0 !important;
         font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 150px;
+    }
+    
+    .stDataFrame th:hover {
+        overflow: visible;
+        white-space: normal;
+        height: auto;
     }
     
     .stDataFrame tr:nth-child(even) {
@@ -116,6 +126,32 @@ st.markdown(
     /* Other elements */
     .stDivider {
         background-color: #2b2b2b !important;
+    }
+    
+    /* Sorting indicators */
+    .sortable-header {
+        cursor: pointer;
+        position: relative;
+        padding-right: 20px !important;
+    }
+    
+    .sortable-header:after {
+        content: "⇅";
+        position: absolute;
+        right: 5px;
+        top: 50%;
+        transform: translateY(-50%);
+        opacity: 0.5;
+    }
+    
+    .sortable-header.asc:after {
+        content: "↑";
+        opacity: 1;
+    }
+    
+    .sortable-header.desc:after {
+        content: "↓";
+        opacity: 1;
     }
     </style>
     """,
@@ -312,9 +348,24 @@ if "current_date" not in st.session_state:
 if "chart_group" not in st.session_state:
     st.session_state.chart_group = "Category"
 
+if "sort_column" not in st.session_state:
+    st.session_state.sort_column = None
+    st.session_state.sort_ascending = True
+
 # Function to toggle chart group
 def toggle_chart_group():
     st.session_state.chart_group = "Activity" if st.session_state.chart_group == "Category" else "Category"
+
+# Function to handle sorting
+def handle_sort(column):
+    if st.session_state.sort_column == column:
+        # Toggle direction if same column clicked
+        st.session_state.sort_ascending = not st.session_state.sort_ascending
+    else:
+        # New column, default to ascending
+        st.session_state.sort_column = column
+        st.session_state.sort_ascending = True
+    st.rerun()
 
 # ---------------- DATE NAVIGATION ----------------
 col1, col2, col3 = st.columns([1, 5, 1])
@@ -364,20 +415,30 @@ try:
     else:
         edit_df = st.session_state["data"].copy()
     
+    # Apply sorting if specified
+    if st.session_state.sort_column:
+        edit_df = edit_df.sort_values(
+            by=st.session_state.sort_column,
+            ascending=st.session_state.sort_ascending
+        )
+    
+    # Add custom CSS classes for sortable headers
+    column_config = {
+        "Start": st.column_config.TextColumn("Start", required=True),
+        "End": st.column_config.TextColumn("End", required=True),
+        "Category": st.column_config.TextColumn("Category", required=True),
+        "Activity": st.column_config.TextColumn("Activity", required=True),
+        "Comment": st.column_config.TextColumn("Comment"),
+        "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
+        "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
+    }
+    
     # Simple data editor with minimal configuration
     edited_df = st.data_editor(
         edit_df,
         num_rows="dynamic",
         use_container_width=True,
-        column_config={
-            "Start": st.column_config.TextColumn("Start", required=True),
-            "End": st.column_config.TextColumn("End", required=True),
-            "Category": st.column_config.TextColumn("Category", required=True),
-            "Activity": st.column_config.TextColumn("Activity", required=True),
-            "Comment": st.column_config.TextColumn("Comment"),
-            "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
-            "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
-        },
+        column_config=column_config,
         hide_index=True,
         key="data_editor"
     )
@@ -391,6 +452,35 @@ try:
 except Exception as e:
     st.error("Error displaying data editor. Please try refreshing the page.")
     st.session_state["data"] = create_empty_df()
+
+# Add JavaScript for sorting
+st.markdown("""
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const headers = document.querySelectorAll('.stDataFrame th');
+    headers.forEach(header => {
+        if (header.textContent.trim() !== '') {
+            header.classList.add('sortable-header');
+            
+            header.addEventListener('click', function() {
+                const column = this.textContent.trim();
+                // Send message to Streamlit to trigger sorting
+                window.parent.postMessage({
+                    isStreamlitMessage: true,
+                    type: 'sort_column',
+                    column: column
+                }, '*');
+            });
+        }
+    });
+});
+</script>
+""", unsafe_allow_html=True)
+
+# Handle sorting from JavaScript
+if st.session_state.get('sort_column_js'):
+    handle_sort(st.session_state.sort_column_js)
+    st.session_state.sort_column_js = None
 
 # Add a recalculate button for user convenience
 if st.button("🔄 Recalculate", key="recalc_btn"):
