@@ -134,11 +134,22 @@ def load_data(d):
         with open(file_path, 'r') as f:
             try:
                 data = json.load(f)
+                # Create DataFrame with explicit data types to prevent issues
                 df = pd.DataFrame(data)
-                # Ensure all columns exist
-                for col in ["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"]:
-                    if col not in df.columns:
-                        df[col] = ""
+                
+                # Explicitly convert all columns to strings initially to avoid type conflicts
+                for col in df.columns:
+                    df[col] = df[col].astype(str)
+                
+                # Convert numeric columns back to appropriate types
+                try:
+                    if "Duration (min)" in df.columns:
+                        df["Duration (min)"] = pd.to_numeric(df["Duration (min)"])
+                    if "% of 12h" in df.columns:
+                        df["% of 12h"] = pd.to_numeric(df["% of 12h"])
+                except:
+                    pass
+                
                 return df
             except:
                 return create_empty_df()
@@ -146,15 +157,17 @@ def load_data(d):
 
 def create_empty_df():
     """Create an empty dataframe with the correct columns."""
-    return pd.DataFrame({
-        "Start": [],
-        "End": [],
-        "Category": [],
-        "Activity": [],
-        "Comment": [],
-        "Duration (min)": [],
-        "% of 12h": []
+    # Create with explicit dtypes to avoid type conflicts
+    df = pd.DataFrame({
+        "Start": pd.Series(dtype='str'),
+        "End": pd.Series(dtype='str'),
+        "Category": pd.Series(dtype='str'),
+        "Activity": pd.Series(dtype='str'),
+        "Comment": pd.Series(dtype='str'),
+        "Duration (min)": pd.Series(dtype='float'),
+        "% of 12h": pd.Series(dtype='float')
     })
+    return df
 
 def save_data(d, df):
     """Save data for a specific date."""
@@ -167,7 +180,7 @@ def save_data(d, df):
 def calculate_metrics(df):
     """Calculate duration and percentage for each activity."""
     # Handle empty dataframe case
-    if df is None or df.empty:
+    if df is None or len(df) == 0:
         return create_empty_df()
     
     # Make a copy to avoid changing during iteration
@@ -176,54 +189,74 @@ def calculate_metrics(df):
     # Process each row
     for i, row in result_df.iterrows():
         # Check for valid start and end times
-        start_time = row.get("Start", "")
-        end_time = row.get("End", "")
-        
-        if start_time and end_time:
-            try:
-                # Parse times
-                start = datetime.strptime(str(start_time).strip(), "%H:%M")
-                end = datetime.strptime(str(end_time).strip(), "%H:%M")
-                
-                # Handle cases where end time is on the next day
-                if end < start:
-                    end = end + timedelta(days=1)
-                
-                # Calculate metrics
-                duration_min = (end - start).seconds // 60
-                percent = round(duration_min / TOTAL_MINUTES * 100, 1)
-                
-                # Update values in the dataframe
-                result_df.at[i, "Duration (min)"] = duration_min
-                result_df.at[i, "% of 12h"] = percent
-            except Exception:
-                # Skip invalid entries
-                pass
+        try:
+            start_time = str(row.get("Start", ""))
+            end_time = str(row.get("End", ""))
+            
+            if start_time and end_time and start_time != "nan" and end_time != "nan":
+                try:
+                    # Parse times
+                    start = datetime.strptime(start_time.strip(), "%H:%M")
+                    end = datetime.strptime(end_time.strip(), "%H:%M")
+                    
+                    # Handle cases where end time is on the next day
+                    if end < start:
+                        end = end + timedelta(days=1)
+                    
+                    # Calculate metrics
+                    duration_min = (end - start).seconds // 60
+                    percent = round(duration_min / TOTAL_MINUTES * 100, 1)
+                    
+                    # Update values in the dataframe
+                    result_df.at[i, "Duration (min)"] = duration_min
+                    result_df.at[i, "% of 12h"] = percent
+                except:
+                    # Skip invalid entries
+                    pass
+        except:
+            # Skip problematic rows
+            continue
     
     return result_df
 
 def create_simple_pie_chart(df, group_field):
     """Create a simple pie chart that should work reliably."""
-    # Create a safe copy for chart operations
-    chart_df = df.copy() if not df.empty else create_empty_df()
+    if df is None or len(df) == 0:
+        # Return an empty chart placeholder
+        placeholder_df = pd.DataFrame({
+            "label": ["No data"],
+            "value": [100]
+        })
+        
+        return alt.Chart(placeholder_df).mark_arc().encode(
+            theta=alt.Theta(field="value"),
+            color=alt.value("#333333")
+        ).properties(
+            width=400,
+            height=400,
+            background="#181818"
+        )
     
-    # Convert duration to numeric if it's not already
+    # Create a safe copy for chart operations
+    chart_df = df.copy()
+    
+    # Convert duration to numeric 
     chart_df["Duration (min)"] = pd.to_numeric(chart_df["Duration (min)"], errors='coerce')
     
     # Filter out rows with missing data
     valid_data = chart_df[chart_df[group_field].notna() & chart_df["Duration (min)"].notna()]
-    valid_data = valid_data[valid_data[group_field] != ""]
+    valid_data = valid_data[valid_data[group_field].astype(str) != ""]
+    valid_data = valid_data[valid_data[group_field].astype(str) != "nan"]
     
     if len(valid_data) == 0:
         # Return an empty chart placeholder
         placeholder_df = pd.DataFrame({
-            group_field: ["No data"],
-            "Duration (min)": [100],
-            "Percent": [100]
+            "label": ["No data"],
+            "value": [100]
         })
         
         return alt.Chart(placeholder_df).mark_arc().encode(
-            theta=alt.Theta(field="Duration (min)"),
+            theta=alt.Theta(field="value"),
             color=alt.value("#333333")
         ).properties(
             width=400,
@@ -232,25 +265,41 @@ def create_simple_pie_chart(df, group_field):
         )
     
     # Aggregate data by the grouping field
-    agg_data = valid_data.groupby(group_field)["Duration (min)"].sum().reset_index()
-    agg_data["Percent"] = (agg_data["Duration (min)"] / TOTAL_MINUTES * 100).round(1)
-    
-    # Create chart
-    chart = alt.Chart(agg_data).mark_arc().encode(
-        theta=alt.Theta(field="Duration (min)"),
-        color=alt.Color(field=group_field, scale=alt.Scale(scheme='tableau20')),
-        tooltip=[
-            alt.Tooltip(group_field),
-            alt.Tooltip("Duration (min)", title="Minutes"),
-            alt.Tooltip("Percent", title="% of 12h", format=".1f")
-        ]
-    ).properties(
-        width=400,
-        height=400,
-        background="#181818"
-    )
-    
-    return chart
+    try:
+        agg_data = valid_data.groupby(group_field)["Duration (min)"].sum().reset_index()
+        agg_data["Percent"] = (agg_data["Duration (min)"] / TOTAL_MINUTES * 100).round(1)
+        
+        # Create chart
+        chart = alt.Chart(agg_data).mark_arc().encode(
+            theta=alt.Theta(field="Duration (min)"),
+            color=alt.Color(field=group_field, scale=alt.Scale(scheme='tableau20')),
+            tooltip=[
+                alt.Tooltip(group_field),
+                alt.Tooltip("Duration (min)", title="Minutes"),
+                alt.Tooltip("Percent", title="% of 12h", format=".1f")
+            ]
+        ).properties(
+            width=400,
+            height=400,
+            background="#181818"
+        )
+        
+        return chart
+    except:
+        # Return a fallback chart on error
+        placeholder_df = pd.DataFrame({
+            "label": ["Error in data"],
+            "value": [100]
+        })
+        
+        return alt.Chart(placeholder_df).mark_arc().encode(
+            theta=alt.Theta(field="value"),
+            color=alt.value("#333333")
+        ).properties(
+            width=400,
+            height=400,
+            background="#181818"
+        )
 
 # ---------------- INITIALIZE SESSION STATE ----------------
 if "current_date" not in st.session_state:
@@ -269,7 +318,7 @@ col1, col2, col3 = st.columns([1, 5, 1])
 with col1:
     if st.button("⬅️", key="prev_day"):
         st.session_state.current_date -= timedelta(days=1)
-        st.experimental_rerun()
+        st.session_state["data_needs_reload"] = True
 
 with col2:
     st.markdown(
@@ -280,51 +329,76 @@ with col2:
 with col3:
     if st.button("➡️", key="next_day"):
         st.session_state.current_date += timedelta(days=1)
-        st.experimental_rerun()
+        st.session_state["data_needs_reload"] = True
 
 st.divider()
 
-# ---------------- LOAD DATA ONLY AFTER DATE NAVIGATION ----------------
-# This prevents issues with data loading and table resetting
-if "data" not in st.session_state or "last_date" not in st.session_state or st.session_state.last_date != st.session_state.current_date:
-    st.session_state.data = load_data(st.session_state.current_date)
-    st.session_state.last_date = st.session_state.current_date
+# ---------------- LOAD DATA ----------------
+# Load data for the current date
+if "data" not in st.session_state or st.session_state.get("data_needs_reload", True):
+    st.session_state["data"] = load_data(st.session_state.current_date)
+    st.session_state["data_needs_reload"] = False
 
 # ---------------- EDITABLE TABLE ----------------
 st.markdown("### Schedule")
 
-# Create a data editor with fixed schema to prevent issues
-edited_df = st.data_editor(
-    st.session_state.data,
-    num_rows="dynamic",
-    use_container_width=True,
-    column_config={
-        "Start": st.column_config.TextColumn("Start", help="Format: HH:MM"),
-        "End": st.column_config.TextColumn("End", help="Format: HH:MM"),
-        "Category": st.column_config.TextColumn("Category"),
-        "Activity": st.column_config.TextColumn("Activity", help="What you did"),
-        "Comment": st.column_config.TextColumn("Comment"),
-        "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
-        "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%"),
-    },
-    hide_index=True
-)
-
-# Update the data in session state with calculated metrics
-if edited_df is not None:
-    st.session_state.data = calculate_metrics(edited_df)
+# Use basic DataFrame editor - no extra bells and whistles that can cause issues
+try:
+    # Create a base dataframe for editing
+    if len(st.session_state["data"]) == 0:
+        # Start with one empty row
+        edit_df = pd.DataFrame([{
+            "Start": "",
+            "End": "",
+            "Category": "",
+            "Activity": "",
+            "Comment": "",
+            "Duration (min)": 0.0,
+            "% of 12h": 0.0
+        }])
+    else:
+        edit_df = st.session_state["data"].copy()
+    
+    # Simple data editor with minimal configuration
+    edited_df = st.data_editor(
+        edit_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Start": "Start",
+            "End": "End", 
+            "Category": "Category",
+            "Activity": "Activity",
+            "Comment": "Comment",
+            "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
+            "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
+        },
+        hide_index=True
+    )
+    
+    # Update data in session state
+    if edited_df is not None:
+        st.session_state["data"] = calculate_metrics(edited_df)
+except Exception as e:
+    st.error("Error displaying data editor. Please try refreshing the page.")
+    st.session_state["data"] = create_empty_df()
 
 # Add a recalculate button for user convenience
 if st.button("🔄 Recalculate", key="recalc_btn"):
-    st.session_state.data = calculate_metrics(st.session_state.data)
-    st.experimental_rerun()
+    try:
+        st.session_state["data"] = calculate_metrics(st.session_state["data"])
+    except Exception as e:
+        st.error(f"Error recalculating: {e}")
 
 # ---------------- ACTION BUTTONS ----------------
 col1, col2, col3 = st.columns([6, 1, 1])
 with col3:
     if st.button("💾 Save", type="primary", key="save_btn"):
-        save_data(st.session_state.current_date, st.session_state.data)
-        st.success("Saved successfully!")
+        try:
+            save_data(st.session_state.current_date, st.session_state["data"])
+            st.success("Saved successfully!")
+        except Exception as e:
+            st.error(f"Error saving: {e}")
 
 st.divider()
 
@@ -353,12 +427,11 @@ with toggle_col2:
     # Hidden button that will be triggered by the JavaScript onclick
     if st.button("Toggle", key="toggle_btn", help="Toggle between Category and Activity view"):
         toggle_chart_group()
-        st.experimental_rerun()
 
 # Create and display the chart
 try:
-    chart = create_simple_pie_chart(st.session_state.data, st.session_state.chart_group)
+    chart = create_simple_pie_chart(st.session_state["data"], st.session_state.chart_group)
     st.altair_chart(chart, use_container_width=True)
 except Exception as e:
-    st.error(f"Error creating chart: {type(e).__name__}")
+    st.error(f"Error creating chart: {str(e)}")
     st.info("Add valid schedule entries to see analytics.")
