@@ -137,18 +137,22 @@ def load_data(d):
                 # Create DataFrame with explicit data types to prevent issues
                 df = pd.DataFrame(data)
                 
-                # Explicitly convert all columns to strings initially to avoid type conflicts
-                for col in df.columns:
-                    df[col] = df[col].astype(str)
+                # Ensure all columns exist with correct types
+                required_columns = {
+                    "Start": str,
+                    "End": str,
+                    "Category": str,
+                    "Activity": str,
+                    "Comment": str,
+                    "Duration (min)": float,
+                    "% of 12h": float
+                }
                 
-                # Convert numeric columns back to appropriate types
-                try:
-                    if "Duration (min)" in df.columns:
-                        df["Duration (min)"] = pd.to_numeric(df["Duration (min)"])
-                    if "% of 12h" in df.columns:
-                        df["% of 12h"] = pd.to_numeric(df["% of 12h"])
-                except:
-                    pass
+                for col, dtype in required_columns.items():
+                    if col not in df.columns:
+                        df[col] = pd.Series(dtype=dtype)
+                    else:
+                        df[col] = df[col].astype(dtype)
                 
                 return df
             except:
@@ -157,8 +161,7 @@ def load_data(d):
 
 def create_empty_df():
     """Create an empty dataframe with the correct columns."""
-    # Create with explicit dtypes to avoid type conflicts
-    df = pd.DataFrame({
+    return pd.DataFrame({
         "Start": pd.Series(dtype='str'),
         "End": pd.Series(dtype='str'),
         "Category": pd.Series(dtype='str'),
@@ -167,7 +170,6 @@ def create_empty_df():
         "Duration (min)": pd.Series(dtype='float'),
         "% of 12h": pd.Series(dtype='float')
     })
-    return df
 
 def save_data(d, df):
     """Save data for a specific date."""
@@ -212,10 +214,12 @@ def calculate_metrics(df):
                     result_df.at[i, "% of 12h"] = percent
                 except:
                     # Skip invalid entries
-                    pass
+                    result_df.at[i, "Duration (min)"] = 0.0
+                    result_df.at[i, "% of 12h"] = 0.0
         except:
             # Skip problematic rows
-            continue
+            result_df.at[i, "Duration (min)"] = 0.0
+            result_df.at[i, "% of 12h"] = 0.0
     
     return result_df
 
@@ -337,6 +341,7 @@ st.divider()
 # Load data for the current date
 if "data" not in st.session_state or st.session_state.get("data_needs_reload", True):
     st.session_state["data"] = load_data(st.session_state.current_date)
+    st.session_state["data"] = calculate_metrics(st.session_state["data"])
     st.session_state["data_needs_reload"] = False
 
 # ---------------- EDITABLE TABLE ----------------
@@ -365,20 +370,24 @@ try:
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "Start": "Start",
-            "End": "End", 
-            "Category": "Category",
-            "Activity": "Activity",
-            "Comment": "Comment",
+            "Start": st.column_config.TextColumn("Start", required=True),
+            "End": st.column_config.TextColumn("End", required=True),
+            "Category": st.column_config.TextColumn("Category", required=True),
+            "Activity": st.column_config.TextColumn("Activity", required=True),
+            "Comment": st.column_config.TextColumn("Comment"),
             "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
             "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
         },
-        hide_index=True
+        hide_index=True,
+        key="data_editor"
     )
     
-    # Update data in session state
-    if edited_df is not None:
+    # Immediately calculate metrics when data changes
+    if not edited_df.equals(st.session_state.get("last_edited_df", None)):
         st.session_state["data"] = calculate_metrics(edited_df)
+        st.session_state["last_edited_df"] = edited_df.copy()
+        st.rerun()
+        
 except Exception as e:
     st.error("Error displaying data editor. Please try refreshing the page.")
     st.session_state["data"] = create_empty_df()
@@ -387,6 +396,7 @@ except Exception as e:
 if st.button("🔄 Recalculate", key="recalc_btn"):
     try:
         st.session_state["data"] = calculate_metrics(st.session_state["data"])
+        st.rerun()
     except Exception as e:
         st.error(f"Error recalculating: {e}")
 
