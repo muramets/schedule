@@ -1,28 +1,34 @@
 """
-Streamlit app: Daily schedule planner in Monkeytype‑style  
-Save as **app.py**. Run with `streamlit run app.py` or deploy to Streamlit Cloud.
-Dependencies (`requirements.txt`):
-    streamlit==1.44.1
-    streamlit-aggrid==0.3.4.post3
-    pandas==2.2.3
-Optionally add `runtime.txt` with `python‑3.11`.
+Schedule Helper — Streamlit app в стиле Monkeytype
+===================================================
+Сохрани как **app.py** и запусти `streamlit run app.py` или задеплой на Streamlit Cloud.
+
+**requirements.txt**:
+```
+streamlit==1.44.1
+streamlit‑aggrid==0.3.4.post3
+pandas==2.2.3
+altair==5.5.0
+```
+(в Cloud при желании добавь `runtime.txt` → `python-3.11`)
 """
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+import altair as alt
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # ---------- CONSTANTS ----------
-TOTAL_MINUTES = 12 * 60  # 12‑hour baseline for % column
+TOTAL_MINUTES = 12 * 60  # 12‑hour baseline
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
-    page_title="Расписание — Monkeytype",
+    page_title="Schedule Helper",
     page_icon="⏱️",
     layout="wide",
 )
@@ -59,21 +65,24 @@ def _file_for(d: date) -> Path:
 def load_df(d: date) -> pd.DataFrame:
     if _file_for(d).exists():
         return pd.read_csv(_file_for(d))
-    cols = ["Start", "End", "Activity", "Comment", "Duration (min)", "% of 12h"]
+    cols = [
+        "Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h",
+    ]
     return pd.DataFrame(columns=cols)
 
 
 def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalculate Duration / % from Start/End, in‑place returns df."""
+    """Calculate *Duration (min)* and *% of 12h* for each row in‑place."""
     def _calc(row):
         try:
-            start = datetime.strptime(str(row["Start").strip(), "%H:%M")
-            end = datetime.strptime(str(row["End").strip(), "%H:%M")
+            start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
+            end = datetime.strptime(str(row["End"]).strip(), "%H:%M")
             dur = (end - start).seconds // 60
             perc = round(dur / TOTAL_MINUTES * 100, 1)
             return pd.Series({"Duration (min)": dur, "% of 12h": perc})
         except Exception:
             return pd.Series({"Duration (min)": None, "% of 12h": None})
+
     df.update(df.apply(_calc, axis=1))
     return df
 
@@ -81,6 +90,23 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
 def save_df(d: date, df: pd.DataFrame):
     compute_metrics(df)
     df.to_csv(_file_for(d), index=False)
+
+
+def make_pie(df: pd.DataFrame, group_field: str, title: str) -> alt.Chart:
+    agg = df.dropna(subset=[group_field, "Duration (min)"]).groupby(group_field)["Duration (min)"].sum().reset_index()
+    if agg.empty:
+        agg = pd.DataFrame({group_field: [""], "Duration (min)": [0]})
+    agg["Percent"] = agg["Duration (min)"] / TOTAL_MINUTES * 100
+    return (
+        alt.Chart(agg)
+        .mark_arc()
+        .encode(
+            theta="Percent",
+            color=f"{group_field}",
+            tooltip=[group_field, "Percent"]
+        )
+        .properties(title=title)
+    )
 
 # ---------- SESSION STATE ----------
 if "current_date" not in st.session_state:
@@ -107,16 +133,14 @@ if nav_cols[2].button("→", key="next_day"):
 st.divider()
 
 # ---------- MAIN TABLE ----------
-# Always keep calculated columns up to date before displaying grid
 compute_metrics(st.session_state.df)
 
 builder = GridOptionsBuilder.from_dataframe(st.session_state.df)
-# default editable + row drag + reorder
 builder.configure_default_column(editable=True, sortable=True, resizable=True)
 builder.configure_grid_options(enableRowDragging=True, rowDragManaged=True)
-# make first column the drag handle
+# first column drag handle
 builder.configure_column("Start", rowDrag=True)
-# calculation columns read‑only
+# calc columns read‑only
 builder.configure_columns(["Duration (min)", "% of 12h"], editable=False)
 
 grid_response = AgGrid(
@@ -128,15 +152,14 @@ grid_response = AgGrid(
     fit_columns_on_grid_load=True,
 )
 
-# Replace data in session state with edited version (with recalculated metrics)
 if grid_response["data"] is not None:
     st.session_state.df = compute_metrics(pd.DataFrame(grid_response["data"]))
 
-# ---------- BUTTONS UNDER TABLE (RIGHT‑ALIGNED) ----------
-btn_cols = st.columns([8, 1, 2])  # adjust first weight for alignment
+# ---------- BUTTONS UNDER TABLE ----------
+btn_cols = st.columns([8, 1, 2])
 with btn_cols[1]:
     if st.button("➕ Добавить строку"):
-        blank = {c: "" for c in ["Start", "End", "Activity", "Comment"]}
+        blank = {c: "" for c in ["Start", "End", "Category", "Activity", "Comment"]}
         st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([blank])], ignore_index=True)
         st.experimental_rerun()
 
@@ -144,3 +167,11 @@ with btn_cols[2]:
     if st.button("💾 Сохранить", type="primary"):
         save_df(st.session_state.current_date, st.session_state.df)
         st.success("Сохранено!")
+
+# ---------- PIE CHARTS ----------
+st.subheader("Разбивка времени")
+chart_cols = st.columns(2)
+with chart_cols[0]:
+    st.altair_chart(make_pie(st.session_state.df, "Category", "По категориям"), use_container_width=True)
+with chart_cols[1]:
+    st.altair_chart(make_pie(st.session_state.df, "Activity", "По activity"), use_container_width=True)
