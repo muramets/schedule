@@ -1,11 +1,11 @@
 """
-Streamlit app: Daily schedule planner in Monkeytype‑style
-Save as **app.py**.  Run with `streamlit run app.py` or deploy to Streamlit Cloud.
-Dependencies (requirements.txt):
+Streamlit app: Daily schedule planner in Monkeytype‑style  
+Save as **app.py**. Run with `streamlit run app.py` or deploy to Streamlit Cloud.
+Dependencies (`requirements.txt`):
     streamlit==1.44.1
     streamlit-aggrid==0.3.4.post3
     pandas==2.2.3
-Optionally add runtime.txt with `python‑3.11` for Cloud.
+Optionally add `runtime.txt` with `python‑3.11`.
 """
 from __future__ import annotations
 
@@ -64,17 +64,17 @@ def load_df(d: date) -> pd.DataFrame:
 
 
 def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Recalculate Duration / % from Start/End, in‑place returns df."""
     def _calc(row):
         try:
-            start = datetime.strptime(str(row["Start"]).strip(), "%H:%M")
-            end = datetime.strptime(str(row["End"]).strip(), "%H:%M")
+            start = datetime.strptime(str(row["Start").strip(), "%H:%M")
+            end = datetime.strptime(str(row["End").strip(), "%H:%M")
             dur = (end - start).seconds // 60
             perc = round(dur / TOTAL_MINUTES * 100, 1)
             return pd.Series({"Duration (min)": dur, "% of 12h": perc})
         except Exception:
             return pd.Series({"Duration (min)": None, "% of 12h": None})
-    metrics = df.apply(_calc, axis=1)
-    df.update(metrics)
+    df.update(df.apply(_calc, axis=1))
     return df
 
 
@@ -106,21 +106,20 @@ if nav_cols[2].button("→", key="next_day"):
 
 st.divider()
 
-# ---------- MAIN TABLE (AG‑GRID) ----------
-# Button to add blank row
-a_col, b_col = st.columns([1, 9])
-if a_col.button("➕ Добавить строку"):
-    blank = {c: "" for c in ["Start", "End", "Activity", "Comment"]}
-    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([blank])], ignore_index=True)
+# ---------- MAIN TABLE ----------
+# Always keep calculated columns up to date before displaying grid
+compute_metrics(st.session_state.df)
 
 builder = GridOptionsBuilder.from_dataframe(st.session_state.df)
+# default editable + row drag + reorder
 builder.configure_default_column(editable=True, sortable=True, resizable=True)
-# allow row drag + column reorder
-builder.configure_grid_options(enableRowDragging=True)
-# hide calc columns from editing
+builder.configure_grid_options(enableRowDragging=True, rowDragManaged=True)
+# make first column the drag handle
+builder.configure_column("Start", rowDrag=True)
+# calculation columns read‑only
 builder.configure_columns(["Duration (min)", "% of 12h"], editable=False)
 
-grid = AgGrid(
+grid_response = AgGrid(
     st.session_state.df,
     gridOptions=builder.build(),
     theme="streamlit",
@@ -129,8 +128,19 @@ grid = AgGrid(
     fit_columns_on_grid_load=True,
 )
 
-# ---------- SAVE ----------
-if b_col.button("💾 Сохранить", type="primary"):
-    st.session_state.df = grid["data"]
-    save_df(st.session_state.current_date, st.session_state.df)
-    st.success("Сохранено!")
+# Replace data in session state with edited version (with recalculated metrics)
+if grid_response["data"] is not None:
+    st.session_state.df = compute_metrics(pd.DataFrame(grid_response["data"]))
+
+# ---------- BUTTONS UNDER TABLE (RIGHT‑ALIGNED) ----------
+btn_cols = st.columns([8, 1, 2])  # adjust first weight for alignment
+with btn_cols[1]:
+    if st.button("➕ Добавить строку"):
+        blank = {c: "" for c in ["Start", "End", "Activity", "Comment"]}
+        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([blank])], ignore_index=True)
+        st.experimental_rerun()
+
+with btn_cols[2]:
+    if st.button("💾 Сохранить", type="primary"):
+        save_df(st.session_state.current_date, st.session_state.df)
+        st.success("Сохранено!")
