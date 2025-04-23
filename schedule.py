@@ -395,11 +395,9 @@ if "data" not in st.session_state or st.session_state.get("data_needs_reload", T
 # ---------------- COLUMN SORTING & EDITABLE TABLE ----------------
 st.markdown("### Schedule")
 
-# Используем data_editor с включённой сортировкой и drag-and-drop
 try:
     # Создаём базовый датафрейм для редактирования
     if len(st.session_state["data"]) == 0:
-        # Начинаем с одной пустой строки
         edit_df = pd.DataFrame([{
             "Start": "",
             "End": "",
@@ -412,12 +410,25 @@ try:
     else:
         edit_df = st.session_state["data"].copy()
 
+    # Приводим все ожидаемые столбцы к нужному типу и порядку
+    expected_columns = [
+        "Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"
+    ]
+    for col in expected_columns:
+        if col not in edit_df.columns:
+            if col in ["Duration (min)", "% of 12h"]:
+                edit_df[col] = 0.0
+            else:
+                edit_df[col] = ""
+    edit_df = edit_df[expected_columns]
+    edit_df["Duration (min)"] = pd.to_numeric(edit_df["Duration (min)"], errors="coerce").fillna(0.0)
+    edit_df["% of 12h"] = pd.to_numeric(edit_df["% of 12h"], errors="coerce").fillna(0.0)
     # Показываем таблицу с drag-and-drop и сортировкой по клику на заголовок
     edited_df = st.data_editor(
         edit_df,
         num_rows="dynamic",
         use_container_width=True,
-        enable_row_reordering=True,  # Drag-and-drop строк
+        enable_row_reordering=True,
         hide_index=True,
         column_config={
             "Start": st.column_config.TextColumn("Start", required=True),
@@ -428,7 +439,6 @@ try:
             "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
             "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
         }
-        # Сортировка теперь встроена: клик по заголовку сортирует столбец
     )
 
     # Автоматический перерасчёт при изменении данных
@@ -438,7 +448,7 @@ try:
         st.rerun()
 
 except Exception as e:
-    st.error("Error displaying data editor. Please try refreshing the page.")
+    st.error(f"Error displaying data editor: {e}")
     st.session_state["data"] = create_empty_df()
 
 # Add a recalculate button for user convenience
