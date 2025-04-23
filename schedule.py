@@ -421,6 +421,22 @@ if "data" not in st.session_state or st.session_state.get("data_needs_reload", T
 
 # ---------------- EDITABLE TABLE ----------------
 try:
+    # Allow adding a new row via button
+    if st.button("Добавить новую строку", key="add_row"):
+        empty_row = {
+            "Start": "",
+            "End": "",
+            "Category": "",
+            "Activity": "",
+            "Comment": "",
+            "Duration (min)": 0.0,
+            "% of 12h": 0.0
+        }
+        new_data = st.session_state["data"].append(empty_row, ignore_index=True)
+        st.session_state["data"] = new_data
+        st.session_state["last_edited_df"] = new_data.copy()
+        st.rerun()
+    
     if len(st.session_state["data"]) == 0:
         edit_df = pd.DataFrame([{
             "Start": "",
@@ -435,7 +451,7 @@ try:
         edit_df = st.session_state["data"].copy()
     
     gb = GridOptionsBuilder.from_dataframe(edit_df)
-    # Enable editing, sorting via header click, filtering and drag-and-drop for row reordering
+    # Enable editing, header click sorting, filtering and row drag-and-drop
     gb.configure_default_column(editable=True, sortable=True, filter=True)
     gb.configure_grid_options(domLayout='normal', rowDragManaged=True, animateRows=True)
     grid_options = gb.build()
@@ -445,7 +461,8 @@ try:
         gridOptions=grid_options,
         key="data_editor",
         update_mode=GridUpdateMode.MODEL_CHANGED,
-        enable_enterprise_modules=False
+        enable_enterprise_modules=False,
+        theme="alpine-dark"  # Dark theme to match the app background
     )
     edited_df = pd.DataFrame(grid_response['data'])
     
