@@ -7,6 +7,7 @@ import altair as alt
 from datetime import datetime, date, timedelta
 import json
 import os
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode  # new import added
 
 # ---------------- CONSTANTS ----------------
 TOTAL_MINUTES = 12 * 60  # 12-hour baseline
@@ -418,22 +419,9 @@ if "data" not in st.session_state or st.session_state.get("data_needs_reload", T
     st.session_state["data"] = calculate_metrics(st.session_state["data"])
     st.session_state["data_needs_reload"] = False
 
-# ---------------- COLUMN SORTING BUTTONS ----------------
-st.markdown("### Schedule")
-cols = ["Start", "End", "Category", "Activity", "Duration (min)", "% of 12h"]
-sort_cols = st.columns(len(cols))
-
-for i, col_name in enumerate(cols):
-    with sort_cols[i]:
-        if st.button(f"{col_name} {'↑' if st.session_state.sort_column == col_name and st.session_state.sort_ascending else '↓' if st.session_state.sort_column == col_name else ''}",
-                  key=f"sort_{col_name}"):
-            sort_data_by_column(col_name)
-
 # ---------------- EDITABLE TABLE ----------------
 try:
-    # Create a base dataframe for editing
     if len(st.session_state["data"]) == 0:
-        # Start with one empty row
         edit_df = pd.DataFrame([{
             "Start": "",
             "End": "",
@@ -446,65 +434,28 @@ try:
     else:
         edit_df = st.session_state["data"].copy()
     
-    # Simple data editor with minimal configuration
-    edited_df = st.data_editor(
-        edit_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Start": st.column_config.TextColumn("Start", required=True),
-            "End": st.column_config.TextColumn("End", required=True),
-            "Category": st.column_config.TextColumn("Category", required=True),
-            "Activity": st.column_config.TextColumn("Activity", required=True),
-            "Comment": st.column_config.TextColumn("Comment"),
-            "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
-            "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
-        },
-        hide_index=True,
-        key="data_editor"
-    )
+    gb = GridOptionsBuilder.from_dataframe(edit_df)
+    # Enable editing, sorting via header click, filtering and drag-and-drop for row reordering
+    gb.configure_default_column(editable=True, sortable=True, filter=True)
+    gb.configure_grid_options(domLayout='normal', rowDragManaged=True, animateRows=True)
+    grid_options = gb.build()
     
-    # Immediately calculate metrics when data changes
+    grid_response = AgGrid(
+        edit_df,
+        gridOptions=grid_options,
+        key="data_editor",
+        update_mode=GridUpdateMode.MODEL_CHANGED,
+        enable_enterprise_modules=False
+    )
+    edited_df = pd.DataFrame(grid_response['data'])
+    
     if not edited_df.equals(st.session_state.get("last_edited_df", None)):
         st.session_state["data"] = calculate_metrics(edited_df)
         st.session_state["last_edited_df"] = edited_df.copy()
         st.rerun()
-        
 except Exception as e:
-    st.error("Error displaying data editor. Please try refreshing the page.")
+    st.error("Error displaying data grid. Please try refreshing the page.")
     st.session_state["data"] = create_empty_df()
-
-# ---------------- ROW MANAGEMENT CONTROLS ----------------
-if len(st.session_state["data"]) > 0:
-    st.markdown("#### Row Actions")
-    row_cols = st.columns(4)
-    
-    with row_cols[0]:
-        row_idx = st.number_input("Row Number", min_value=1, max_value=len(st.session_state["data"]), value=1, step=1)
-        idx = row_idx - 1  # Convert to 0-based index
-        
-    with row_cols[1]:
-        if st.button("Move Up ⬆️", key="move_up"):
-            move_row_up(idx)
-            st.rerun()
-            
-    with row_cols[2]:
-        if st.button("Move Down ⬇️", key="move_down"):
-            move_row_down(idx)
-            st.rerun()
-            
-    with row_cols[3]:
-        if st.button("Delete Row 🗑️", key="delete_row"):
-            delete_row(idx)
-            st.rerun()
-
-# Add a recalculate button for user convenience
-if st.button("🔄 Recalculate", key="recalc_btn"):
-    try:
-        st.session_state["data"] = calculate_metrics(st.session_state["data"])
-        st.rerun()
-    except Exception as e:
-        st.error(f"Error recalculating: {e}")
 
 # ---------------- ACTION BUTTONS ----------------
 col1, col2, col3 = st.columns([6, 1, 1])
