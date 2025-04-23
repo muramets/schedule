@@ -392,22 +392,14 @@ if "data" not in st.session_state or st.session_state.get("data_needs_reload", T
     st.session_state["data"] = calculate_metrics(st.session_state["data"])
     st.session_state["data_needs_reload"] = False
 
-# ---------------- COLUMN SORTING BUTTONS ----------------
+# ---------------- COLUMN SORTING & EDITABLE TABLE ----------------
 st.markdown("### Schedule")
-cols = ["Start", "End", "Category", "Activity", "Duration (min)", "% of 12h"]
-sort_cols = st.columns(len(cols))
 
-for i, col_name in enumerate(cols):
-    with sort_cols[i]:
-        if st.button(f"{col_name} {'↑' if st.session_state.sort_column == col_name and st.session_state.sort_ascending else '↓' if st.session_state.sort_column == col_name else ''}",
-                  key=f"sort_{col_name}"):
-            sort_data_by_column(col_name)
-
-# ---------------- EDITABLE TABLE ----------------
+# Используем data_editor с включённой сортировкой и drag-and-drop
 try:
-    # Create a base dataframe for editing
+    # Создаём базовый датафрейм для редактирования
     if len(st.session_state["data"]) == 0:
-        # Start with one empty row
+        # Начинаем с одной пустой строки
         edit_df = pd.DataFrame([{
             "Start": "",
             "End": "",
@@ -419,13 +411,14 @@ try:
         }])
     else:
         edit_df = st.session_state["data"].copy()
-    
-    # Enable drag-and-drop row reordering
+
+    # Показываем таблицу с drag-and-drop и сортировкой по клику на заголовок
     edited_df = st.data_editor(
         edit_df,
         num_rows="dynamic",
         use_container_width=True,
-        enable_row_reordering=True,  # <-- Enable drag-and-drop
+        enable_row_reordering=True,  # Drag-and-drop строк
+        hide_index=True,
         column_config={
             "Start": st.column_config.TextColumn("Start", required=True),
             "End": st.column_config.TextColumn("End", required=True),
@@ -434,17 +427,16 @@ try:
             "Comment": st.column_config.TextColumn("Comment"),
             "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
             "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
-        },
-        hide_index=True,
-        key="data_editor"
+        }
+        # Сортировка теперь встроена: клик по заголовку сортирует столбец
     )
-    
-    # Immediately calculate metrics when data changes
+
+    # Автоматический перерасчёт при изменении данных
     if not edited_df.equals(st.session_state.get("last_edited_df", None)):
         st.session_state["data"] = calculate_metrics(edited_df)
         st.session_state["last_edited_df"] = edited_df.copy()
         st.rerun()
-        
+
 except Exception as e:
     st.error("Error displaying data editor. Please try refreshing the page.")
     st.session_state["data"] = create_empty_df()
