@@ -7,6 +7,7 @@ import altair as alt
 from datetime import datetime, date, timedelta
 import json
 import os
+import streamlit.components.v1 as components
 
 # ---------------- CONSTANTS ----------------
 TOTAL_MINUTES = 12 * 60  # 12-hour baseline
@@ -49,6 +50,12 @@ st.markdown(
         background-color: #232323 !important;
         color: #e0e0e0 !important;
         font-weight: 600;
+        cursor: pointer !important;
+    }
+    
+    .stDataFrame th:hover {
+        background-color: #2b2b2b !important;
+        color: #ff8f1f !important;
     }
     
     /* Fix for table header tooltip issues */
@@ -78,6 +85,7 @@ st.markdown(
     
     .stButton > button[data-baseweb="button"][kind="primary"] {
         background-color: #ff8f1f !important;
+        color: #181818 !important;
     }
     
     /* Radio button styling */
@@ -117,29 +125,48 @@ st.markdown(
         font-weight: 600;
     }
     
+    /* Sortable headers styling */
+    .sortable-header {
+        cursor: pointer;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .sortable-header:hover {
+        color: #ff8f1f;
+    }
+    
+    .sort-icon {
+        margin-left: 5px;
+        font-size: 0.8em;
+    }
+    
     /* Other elements */
     .stDivider {
         background-color: #2b2b2b !important;
     }
     
-    /* Row action buttons */
-    .row-actions {
-        display: flex;
-        gap: 5px;
+    /* For the drag handle in the draggable editor */
+    .drag-handle {
+        cursor: grab;
+        color: #555;
     }
     
-    .row-action-btn {
-        cursor: pointer;
-        padding: 2px 5px;
-        border-radius: 3px;
-        background-color: #333;
-        color: #e0e0e0;
-        border: none;
-        font-size: 12px;
+    .drag-handle:hover {
+        color: #ff8f1f;
     }
     
-    .row-action-btn:hover {
-        background-color: #555;
+    /* Styling for the data editor with drag handles */
+    .draggable-table-container {
+        position: relative;
+    }
+
+    /* Info box styling */
+    .stAlert {
+        background-color: #232323 !important;
+        border-color: #555 !important;
     }
     </style>
     """,
@@ -357,12 +384,18 @@ def sort_data_by_column(column_name):
         st.session_state.sort_ascending = True
     
     # Apply sorting to the data
-    if st.session_state.sort_column:
+    if st.session_state.sort_column and st.session_state.sort_column in st.session_state["data"].columns:
         st.session_state["data"] = st.session_state["data"].sort_values(
             by=st.session_state.sort_column, 
             ascending=st.session_state.sort_ascending
         )
-        st.session_state["data_needs_reload"] = False
+
+# Function to handle drag-and-drop reordering
+def handle_reordering(new_order):
+    """Reorder the dataframe based on the new indices"""
+    if "data" in st.session_state and len(st.session_state["data"]) > 0:
+        # Reorder the dataframe
+        st.session_state["data"] = st.session_state["data"].reindex(new_order).reset_index(drop=True)
 
 # ---------------- DATE NAVIGATION ----------------
 col1, col2, col3 = st.columns([1, 5, 1])
@@ -392,12 +425,17 @@ if "data" not in st.session_state or st.session_state.get("data_needs_reload", T
     st.session_state["data"] = calculate_metrics(st.session_state["data"])
     st.session_state["data_needs_reload"] = False
 
-# ---------------- COLUMN SORTING & EDITABLE TABLE ----------------
+# ---------------- SCHEDULE TABLE ----------------
 st.markdown("### Schedule")
 
+# Create header with information about the new functionality
+st.info("🔍 Click on column headers to sort the table. You can also drag and drop rows to reorder them.")
+
+# -------------------- EDITABLE TABLE WITH DRAG-AND-DROP --------------------
 try:
-    # Создаём базовый датафрейм для редактирования
+    # Create a base dataframe for editing
     if len(st.session_state["data"]) == 0:
+        # Start with one empty row
         edit_df = pd.DataFrame([{
             "Start": "",
             "End": "",
@@ -409,47 +447,91 @@ try:
         }])
     else:
         edit_df = st.session_state["data"].copy()
-
-    # Приводим все ожидаемые столбцы к нужному типу и порядку
-    expected_columns = [
-        "Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"
-    ]
-    for col in expected_columns:
-        if col not in edit_df.columns:
-            if col in ["Duration (min)", "% of 12h"]:
-                edit_df[col] = 0.0
-            else:
-                edit_df[col] = ""
-    edit_df = edit_df[expected_columns]
-    edit_df["Duration (min)"] = pd.to_numeric(edit_df["Duration (min)"], errors="coerce").fillna(0.0)
-    edit_df["% of 12h"] = pd.to_numeric(edit_df["% of 12h"], errors="coerce").fillna(0.0)
-    # Показываем таблицу с drag-and-drop и сортировкой по клику на заголовок
+    
+    # Add column configurations with sort indicators
+    column_config = {
+        "Start": st.column_config.TextColumn(
+            "Start", 
+            required=True,
+            help="Format: HH:MM"
+        ),
+        "End": st.column_config.TextColumn(
+            "End", 
+            required=True,
+            help="Format: HH:MM"
+        ),
+        "Category": st.column_config.TextColumn(
+            "Category", 
+            required=True
+        ),
+        "Activity": st.column_config.TextColumn(
+            "Activity", 
+            required=True
+        ),
+        "Comment": st.column_config.TextColumn(
+            "Comment"
+        ),
+        "Duration (min)": st.column_config.NumberColumn(
+            "Duration (min)", 
+            disabled=True,
+            format="%d"
+        ),
+        "% of 12h": st.column_config.NumberColumn(
+            "% of 12h", 
+            disabled=True, 
+            format="%.1f%%"
+        )
+    }
+    
+    # Add sort indicators to column headers if sorting is active
+    if st.session_state.sort_column:
+        col_name = st.session_state.sort_column
+        if col_name in column_config:
+            sort_indicator = " ↑" if st.session_state.sort_ascending else " ↓"
+            column_config[col_name].label = f"{col_name}{sort_indicator}"
+    
+    # Add dataframe editor with drag-and-drop capability
     edited_df = st.data_editor(
         edit_df,
         num_rows="dynamic",
         use_container_width=True,
-        enable_row_reordering=True,
+        column_config=column_config,
         hide_index=True,
-        column_config={
-            "Start": st.column_config.TextColumn("Start", required=True),
-            "End": st.column_config.TextColumn("End", required=True),
-            "Category": st.column_config.TextColumn("Category", required=True),
-            "Activity": st.column_config.TextColumn("Activity", required=True),
-            "Comment": st.column_config.TextColumn("Comment"),
-            "Duration (min)": st.column_config.NumberColumn("Duration (min)", disabled=True),
-            "% of 12h": st.column_config.NumberColumn("% of 12h", disabled=True, format="%.1f%%")
-        }
+        key="data_editor",
+        disabled=False,
+        # Enable row drag-and-drop
+        column_order=["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"],
+        # This enables row reordering through drag-and-drop
+        use_dynamic_ordering=True
     )
-
-    # Автоматический перерасчёт при изменении данных
+    
+    # Handle data changes
     if not edited_df.equals(st.session_state.get("last_edited_df", None)):
-        st.session_state["data"] = calculate_metrics(edited_df)
+        # Calculate metrics based on edited data
+        updated_df = calculate_metrics(edited_df)
+        st.session_state["data"] = updated_df
         st.session_state["last_edited_df"] = edited_df.copy()
         st.rerun()
 
 except Exception as e:
-    st.error(f"Error displaying data editor: {e}")
+    st.error(f"Error displaying data editor. Please try refreshing the page. Error: {e}")
     st.session_state["data"] = create_empty_df()
+
+# Add column sort buttons
+st.markdown("#### Sort by Column")
+sort_cols = st.columns(7)
+col_names = ["Start", "End", "Category", "Activity", "Comment", "Duration (min)", "% of 12h"]
+
+for i, col_name in enumerate(col_names):
+    with sort_cols[i]:
+        # Show a different icon depending on sort state
+        sort_text = col_name
+        if st.session_state.sort_column == col_name:
+            sort_text += " ↑" if st.session_state.sort_ascending else " ↓"
+            
+        if st.button(sort_text, key=f"sort_{col_name}"):
+            sort_data_by_column(col_name)
+            st.rerun()
 
 # Add a recalculate button for user convenience
 if st.button("🔄 Recalculate", key="recalc_btn"):
@@ -504,3 +586,136 @@ try:
 except Exception as e:
     st.error(f"Error creating chart: {str(e)}")
     st.info("Add valid schedule entries to see analytics.")
+
+# Add JavaScript for enhanced table interactivity
+js_code = """
+<script>
+// Function to handle column header clicks for sorting
+function setupSortableHeaders() {
+    // Wait for table headers to be rendered
+    setTimeout(() => {
+        const headers = document.querySelectorAll('.stDataFrame th');
+        if (headers.length === 0) {
+            return; // No headers found yet, try again later
+        }
+        
+        headers.forEach((header, index) => {
+            // Skip if already set up
+            if (header.getAttribute('data-sort-setup') === 'true') {
+                return;
+            }
+            
+            // Get column name (remove sort indicators)
+            const columnName = header.textContent.replace(/[↑↓]/g, '').trim();
+            
+            // Add click event
+            header.addEventListener('click', function() {
+                // Find the corresponding button and click it
+                const sortButton = document.querySelector(`button[key="sort_${columnName}"]`);
+                if (sortButton) {
+                    sortButton.click();
+                }
+            });
+            
+            // Mark as set up
+            header.setAttribute('data-sort-setup', 'true');
+            
+            // Add hover effect
+            header.style.transition = 'color 0.3s ease, background-color 0.3s ease';
+        });
+    }, 1000); // Wait for elements to be fully rendered
+}
+
+// Enhance drag handles with better visual feedback
+function enhanceDragHandles() {
+    setTimeout(() => {
+        const dragHandles = document.querySelectorAll('[data-testid="column-drag-handle"]');
+        dragHandles.forEach(handle => {
+            handle.style.cursor = 'grab';
+            handle.addEventListener('mousedown', () => {
+                handle.style.cursor = 'grabbing';
+            });
+            document.addEventListener('mouseup', () => {
+                handle.style.cursor = 'grab';
+            });
+        });
+    }, 1000);
+}
+
+// Run our setup functions
+document.addEventListener('DOMContentLoaded', function() {
+    // Initial setup
+    setupSortableHeaders();
+    enhanceDragHandles();
+    
+    // Set up mutation observer to catch dynamically loaded elements
+    const observer = new MutationObserver((mutations) => {
+        setupSortableHeaders();
+        enhanceDragHandles();
+    });
+    
+    // Start observing document body for DOM changes
+    observer.observe(document.body, { 
+        childList: true, 
+        subtree: true 
+    });
+});
+
+// Also set up periodic checks for reliability
+setInterval(setupSortableHeaders, 2000);
+setInterval(enhanceDragHandles, 2000);
+</script>
+"""
+
+# Inject the JavaScript
+components.html(js_code, height=0)
+
+# Add summary statistics below the chart
+if len(st.session_state["data"]) > 0:
+    st.markdown("### Summary Statistics")
+    
+    # Calculate total time tracked
+    total_minutes = st.session_state["data"]["Duration (min)"].sum()
+    total_percent = round(total_minutes / TOTAL_MINUTES * 100, 1)
+    
+    # Create metrics in columns
+    metric_cols = st.columns(3)
+    
+    with metric_cols[0]:
+        hours = int(total_minutes // 60)
+        mins = int(total_minutes % 60)
+        st.metric("Total Time Tracked", f"{hours}h {mins}m")
+    
+    with metric_cols[1]:
+        st.metric("% of 12h Day", f"{total_percent}%")
+    
+    with metric_cols[2]:
+        remaining = TOTAL_MINUTES - total_minutes
+        if remaining < 0:
+            st.metric("Overbooked", f"{abs(int(remaining)) // 60}h {abs(int(remaining)) % 60}m")
+        else:
+            st.metric("Unallocated Time", f"{int(remaining) // 60}h {int(remaining) % 60}m")
+    
+    # Add category breakdown
+    if st.session_state["data"]["Category"].notna().any():
+        st.markdown("#### Category Breakdown")
+        
+        # Group by category
+        cat_data = st.session_state["data"].groupby("Category")["Duration (min)"].sum().reset_index()
+        cat_data["% of Total"] = (cat_data["Duration (min)"] / total_minutes * 100).round(1)
+        cat_data["Hours"] = (cat_data["Duration (min)"] / 60).round(2)
+        
+        # Sort by duration
+        cat_data = cat_data.sort_values("Duration (min)", ascending=False)
+        
+        # Display as table
+        st.dataframe(
+            cat_data[["Category", "Hours", "% of Total"]],
+            column_config={
+                "Category": st.column_config.TextColumn("Category"),
+                "Hours": st.column_config.NumberColumn("Hours", format="%.2f"),
+                "% of Total": st.column_config.NumberColumn("% of Total", format="%.1f%%")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
